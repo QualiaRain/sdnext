@@ -18,7 +18,7 @@ def asymmetricConv2DConvForward(self, input: Tensor, weight: Tensor, bias: Optio
     self.paddingX = (self._reversed_padding_repeated_twice[0], self._reversed_padding_repeated_twice[1], 0, 0) # pylint: disable=protected-access
     self.paddingY = (0, 0, self._reversed_padding_repeated_twice[2], self._reversed_padding_repeated_twice[3]) # pylint: disable=protected-access
     working = F.pad(input, self.paddingX, mode=modex)
-    working = F.pad(working, self.paddingY, mode=modex)
+    working = F.pad(working, self.paddingY, mode=modey)
     return F.conv2d(working, weight, bias, self.stride, _pair(0), self.dilation, self.groups)
 
 
