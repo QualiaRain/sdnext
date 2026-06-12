@@ -41,7 +41,8 @@ def setup_middleware(app: FastAPI, cmd_opts):
             duration = str(round(time.time() - ts, 4))
             res.headers["X-Process-Time"] = duration
             endpoint = req.scope.get('path', 'err')
-            client = req.scope.get('client', ('0:0.0.0', 0))[0]
+            client_data = req.scope.get('client', ('0:0.0.0', 0))
+            client = client_data[0] if isinstance(client_data, (tuple, list)) and len(client_data) > 0 else '0:0.0.0'
             token = req.cookies.get("access-token") or req.cookies.get("access-token-unsecure")
             validate_request(client, endpoint)
             if (cmd_opts.api_log):
@@ -79,7 +80,8 @@ def setup_middleware(app: FastAPI, cmd_opts):
             return JSONResponse(status_code=err["code"], content=jsonable_encoder(err))
 
         endpoint = req.scope.get("path", "err")
-        client = req.scope.get("client", ("0:0.0.0", 0))[0]
+        client_data = req.scope.get("client", ("0:0.0.0", 0))
+        client = client_data[0] if isinstance(client_data, (tuple, list)) and len(client_data) > 0 else '0:0.0.0'
         if not validate_log(client, endpoint):
             log.error(f"API error: {req.method}: {req.url} {err}")
 

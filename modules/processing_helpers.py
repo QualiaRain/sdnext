@@ -133,7 +133,11 @@ def apply_overlay(image: Image.Image, paste_loc, index, overlays):
 
 def create_binary_mask(image):
     if image.mode == 'RGBA' and image.getextrema()[-1] != (255, 255):
-        image = image.split()[-1].convert("L").point(lambda x: 255 if x > 128 else 0)
+        bands = image.split()
+        if len(bands) > 0:
+            image = bands[-1].convert("L").point(lambda x: 255 if x > 128 else 0)
+        else:
+            image = image.convert('L')
     else:
         image = image.convert('L')
     return image

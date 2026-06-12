@@ -13,7 +13,8 @@ def get_js(request: Request):
     file = request.query_params.get("file", None)
     if (file is None) or (len(file) == 0):
         raise HTTPException(status_code=400, detail="file parameter is required")
-    ext = file.split('.')[-1]
+    parts = file.split('.')
+    ext = parts[-1] if len(parts) > 1 else ''
     if ext not in ['js', 'css', 'map', 'html', 'wasm', 'ttf', 'mjs', 'json']:
         raise HTTPException(status_code=400, detail=f"invalid file extension: {ext}")
     if not os.path.exists(file):
@@ -43,7 +44,9 @@ def get_motd():
     motd = ""
     ver = get_version()
     if ver.get("updated", None) is not None:
-        motd = f"version <b>{ver['commit']} {ver['updated']}</b> <span style='color: var(--primary-500)'>{ver['url'].split('/')[-1]}</span><br>"  # pylint: disable=use-maxsplit-arg
+        url_parts = ver.get('url', '').split('/')
+        repo_name = url_parts[-1] if url_parts and len(url_parts) > 0 else 'repo'
+        motd = f"version <b>{ver['commit']} {ver['updated']}</b> <span style='color: var(--primary-500)'>{repo_name}</span><br>"
     if shared.opts.motd:
         try:
             res = requests.get("https://vladmandic.github.io/sdnext/motd", timeout=3)

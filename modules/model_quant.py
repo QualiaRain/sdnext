@@ -125,7 +125,8 @@ def create_sdnq_config(kwargs = None, allow: bool = True, module: str = 'Model',
         if modules_dtype_dict is None:
             modules_dtype_dict = {}
 
-        sdnq_modules_to_not_convert = [m.strip() for m in re.split(';|,| ', shared.opts.sdnq_modules_to_not_convert) if len(m.strip()) > 1]
+        sdnq_value = shared.opts.sdnq_modules_to_not_convert if shared.opts.sdnq_modules_to_not_convert else ''
+        sdnq_modules_to_not_convert = [m.strip() for m in re.split(';|,| ', str(sdnq_value)) if len(m.strip()) > 1]
         if len(sdnq_modules_to_not_convert) > 0:
             modules_to_not_convert.extend(sdnq_modules_to_not_convert)
 

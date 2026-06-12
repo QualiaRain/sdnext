@@ -345,8 +345,10 @@ class YoloRestorer(Detailer):
                 items = self.merge(items)
 
             shared.opts.data['mask_apply_overlay'] = True
-            orig_prompt: str = orig_p.get('all_prompts', [''])[0]
-            orig_negative: str = orig_p.get('all_negative_prompts', [''])[0]
+            all_prompts = orig_p.get('all_prompts', [''])
+            orig_prompt: str = all_prompts[0] if all_prompts else ''
+            all_negative = orig_p.get('all_negative_prompts', [''])
+            orig_negative: str = all_negative[0] if all_negative else ''
             prompt: str = orig_p.get('detailer_prompt', '')
             negative: str = orig_p.get('detailer_negative', '')
             if prompt is None or len(prompt) == 0:
@@ -486,7 +488,7 @@ class YoloRestorer(Detailer):
     def change_mode(self, dropdown, text):
         self.ui_mode = not self.ui_mode
         if self.ui_mode:
-            value = [val.split(':')[0].strip() for val in text.split(',')]
+            value = [val.split(':', 1)[0].strip() for val in text.split(',') if val.strip()]
             return gr.update(visible=True, value=value), gr.update(visible=False), gr.update(visible=True)
         else:
             value = ', '.join(dropdown)

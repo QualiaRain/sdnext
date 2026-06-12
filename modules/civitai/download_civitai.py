@@ -536,7 +536,8 @@ def resolve_preview_file(item: dict) -> str | None:
         try:
             import urllib.parse
             parsed = urllib.parse.urlparse(preview_url)
-            fn = urllib.parse.parse_qs(parsed.query).get('filename', [None])[0]
+            fn_list = urllib.parse.parse_qs(parsed.query).get('filename', [None])
+            fn = fn_list[0] if fn_list and len(fn_list) > 0 else None
             if fn:
                 fn = urllib.parse.unquote(fn)
                 if os.path.isfile(fn):

@@ -13,8 +13,19 @@ debug_log = log.trace if debug else lambda *args, **kwargs: None
 
 def get_stepwise(param, step, steps): # from https://github.com/cheald/sd-webui-loractl/blob/master/loractl/lib/utils.py
     def sorted_positions(raw_steps):
-        steps = [[float(s.strip()) for s in re.split("[@~]", x)]
-                 for x in re.split("[,;]", str(raw_steps))]
+        steps = []
+        for x in re.split("[,;]", str(raw_steps)):
+            if x.strip():  # Skip empty strings
+                step_vals = []
+                for s in re.split("[@~]", x):
+                    try:
+                        step_vals.append(float(s.strip()))
+                    except (ValueError, AttributeError):
+                        pass
+                if step_vals:
+                    steps.append(step_vals)
+        if len(steps) == 0 or len(steps[0]) == 0:
+            return None
         if len(steps[0]) == 1: # If we just got a single number, just return it
             return steps[0][0]
         steps = [[s[0], s[1] if len(s) == 2 else 1] for s in steps] # Add implicit 1s to any steps which don't have a weight

@@ -176,7 +176,13 @@ def find() -> ROCmEnvironment | None:
             minor: int
 
             def __init__(self, string: str):
-                self.major, self.minor = [int(v) for v in string.strip().split(".")]
+                parts = string.strip().split(".")
+                if len(parts) >= 2:
+                    self.major, self.minor = int(parts[0]), int(parts[1])
+                elif len(parts) == 1:
+                    self.major, self.minor = int(parts[0]), 0
+                else:
+                    self.major, self.minor = 0, 0
 
             def __gt__(self, other):
                 return self.major * 10 + other.minor > other.major * 10 + other.minor
@@ -358,7 +364,13 @@ else: # sys.platform != "win32"
             _agents = [x for x in _agents if x and x != 'gfx000']
         except Exception: # old version of ROCm WSL doesn't have rocm_agent_enumerator
             _agents = spawn("rocminfo").split("\n")
-            _agents = [x.strip().split(" ")[-1] for x in _agents if x.startswith('  Name:') and "CPU" not in x]
+            result = []
+            for x in _agents:
+                if x.startswith('  Name:') and "CPU" not in x:
+                    parts = x.strip().split(" ")
+                    if len(parts) > 0:
+                        result.append(parts[-1])
+            _agents = result
         return [Agent(x) for x in _agents]
 
     def postinstall():
