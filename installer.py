@@ -381,7 +381,7 @@ def update(folder, keep_branch = False, rebase = True):
         debug(f'Install update: folder={folder} args={arg} {res}')
     else:
         b = branch(folder)
-        if branch is None:
+        if b is None or b == '':
             res = git(f'pull {arg}', folder)
             debug(f'Install update: folder={folder} branch={b} args={arg} {res}')
         else:

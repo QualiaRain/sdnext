@@ -21,8 +21,13 @@ grid = importlib.import_module('image-grid').grid
 
 def color_to_df(param):
     colors_pre_list = str(param).replace('([(','').split(', (')[0:-1]
-    df_rgb = [i.split('), ')[0] + ')' for i in colors_pre_list]
-    df_percent = [i.split('), ')[1].replace(')','') for i in colors_pre_list]
+    df_rgb = []
+    df_percent = []
+    for i in colors_pre_list:
+        parts = i.split('), ')
+        if len(parts) >= 2:
+            df_rgb.append(parts[0] + ')')
+            df_percent.append(parts[1].replace(')',''))
     #convert RGB to HEX code
     df_color_up = [rgb2hex(int(i.split(", ")[0].replace("(","")),
                            int(i.split(", ")[1]),

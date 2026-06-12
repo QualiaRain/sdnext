@@ -28,6 +28,8 @@ def wrap(text: str, font: ImageFont.ImageFont, length: int):
 
 
 def grid(images, labels = None, width = 0, height = 0, border = 0, square = False, horizontal = False, vertical = False): # pylint: disable=redefined-outer-name
+    if not images:
+        raise ValueError("images list cannot be empty")
     if horizontal:
         rows = 1
     elif vertical:
@@ -36,14 +38,14 @@ def grid(images, labels = None, width = 0, height = 0, border = 0, square = Fals
         rows = round(math.sqrt(len(images)))
     else:
         rows = math.floor(math.sqrt(len(images)))
-    cols = math.ceil(len(images) / rows)
+    cols = math.ceil(len(images) / rows) if rows > 0 else 1
     size = [0, 0]
     if width == 0:
         w = max([i.size[0] for i in images])
         size[0] = cols * w + cols * border
     else:
         size[0] = width
-        w = round(width / cols)
+        w = round(width / cols) if cols > 0 else 0
     if height == 0:
         h = max([i.size[1] for i in images])
         size[1] = rows * h + rows * border

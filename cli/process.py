@@ -21,7 +21,7 @@ all_images_by_type = {}
 
 
 class Result():
-    def __init__(self, typ: str, fn: str, tag: str | None = None, requested: list = []):
+    def __init__(self, typ: str, fn: str, tag: str | None = None, requested: list | None = None):
         self.type = typ
         self.input = fn
         self.output = ''
@@ -32,7 +32,7 @@ class Result():
         self.tag = tag
         self.tags = []
         self.ops = []
-        self.steps = requested
+        self.steps = requested if requested is not None else []
 
 
 def detect_blur(image: Image.Image):
