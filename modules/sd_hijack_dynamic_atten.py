@@ -14,7 +14,6 @@ def find_split_size(original_size: int, slice_block_size: int, slice_rate: int =
         split_size = split_size - 1
         if split_size <= 1:
             return 1
-    return split_size
 
 
 # Find slice sizes for SDPA
