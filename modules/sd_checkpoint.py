@@ -86,7 +86,7 @@ class CheckpointInfo:
                 self.sha256 = repo[0]['hash']
                 self.type = 'diffusers'
 
-        self.shorthash = self.sha256[0:10] if self.sha256 else None
+        self.shorthash = self.sha256[0:10] if self.sha256 and len(self.sha256) >= 10 else None
         self.title = self.name if self.shorthash is None else f'{self.name} [{self.shorthash}]'
         self.path = folder or self.filename
         self.model_name = os.path.basename(self.name)

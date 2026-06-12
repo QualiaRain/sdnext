@@ -184,6 +184,8 @@ def _convert_to_ai_toolkit_cat(sds_sd, ait_sd, sds_key, ait_keys, dims=None):
 
     # calculate dims if not provided
     num_splits = len(ait_keys)
+    if num_splits == 0:
+        return
     if dims is None:
         dims = [up_weight.shape[0] // num_splits] * num_splits
     else:

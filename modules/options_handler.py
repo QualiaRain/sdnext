@@ -181,7 +181,10 @@ class Options:
             log.error(f'Settings: config="{filename}" secrets="{secretsfn}" {err}')
 
     def save(self, silent=False):
-        threading.Thread(target=self.save_atomic, args=(silent,)).start()
+        if not hasattr(self, '_save_lock'):
+            self._save_lock = threading.Lock()
+        with self._save_lock:
+            self.save_atomic(silent)
 
     def same_type(self, x, y):
         if x is None or y is None:
@@ -222,7 +225,11 @@ class Options:
             func()
 
     def dumpjson(self):
-        d = {k: self.data.get(k, self.data_labels.get(k).default) for k in self.data_labels.keys()}
+        d = {}
+        for k in self.data_labels.keys():
+            label = self.data_labels.get(k)
+            default_val = label.default if label else None
+            d[k] = self.data.get(k, default_val)
         metadata = {
             k: {
                 "is_stored": k in self.data and self.data[k] != self.data_labels[k].default, # pylint: disable=unnecessary-dict-index-lookup

@@ -58,7 +58,7 @@ def readfile(filename: str | os.PathLike[str], silent: bool = False, lock: bool 
             lock_file.release_read_lock()
         if locked and os.path.exists(f"{filename}.lock"):
             os.remove(f"{filename}.lock")
-    except Exception:
+    except (OSError, IOError):
         locking_available = False
 
     if isinstance(data, list) and as_type == "dict":

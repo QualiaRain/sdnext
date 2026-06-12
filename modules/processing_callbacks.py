@@ -96,11 +96,13 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
         ip_adapter_ends = list(p.ip_adapter_ends)
         if any(end != 1 for end in ip_adapter_ends) or any(start != 0 for start in ip_adapter_starts):
             if 'Flux' in pipe.__class__.__name__:
-                ip_adapter_scales = [(ip_adapter_starts[0] + (ip_adapter_ends[0] - ip_adapter_starts[0]) * (i / (19 - 1))) for i in range(19)]
+                if ip_adapter_starts and ip_adapter_ends:
+                    ip_adapter_scales = [(ip_adapter_starts[0] + (ip_adapter_ends[0] - ip_adapter_starts[0]) * (i / (19 - 1))) for i in range(19)]
             else:
-                for i in range(len(ip_adapter_scales)):
-                    ip_adapter_scales[i] *= 1.0 if (step >= pipe.num_timesteps * ip_adapter_starts[i]) else 0.0
-                    ip_adapter_scales[i] *= 1.0 if (step <= pipe.num_timesteps * ip_adapter_ends[i]) else 0.0
+                if len(ip_adapter_scales) == len(ip_adapter_starts) == len(ip_adapter_ends):
+                    for i in range(len(ip_adapter_scales)):
+                        ip_adapter_scales[i] *= 1.0 if (step >= pipe.num_timesteps * ip_adapter_starts[i]) else 0.0
+                        ip_adapter_scales[i] *= 1.0 if (step <= pipe.num_timesteps * ip_adapter_ends[i]) else 0.0
             debug_callback(f"Callback: IP Adapter scales={ip_adapter_scales}")
             pipe.set_ip_adapter_scale(ip_adapter_scales)
     if step != getattr(pipe, 'num_timesteps', 0):
