@@ -297,6 +297,9 @@ def do_openclip(image, req):
     if not req.analyze:
         return caption, None, None, None, None, None
     results = analyze_image(image, clip_model=req.clip_model, blip_model=req.blip_model)
+    if not isinstance(results, list) or len(results) < 5:
+        log.warning(f'API caption analyze returned {len(results) if isinstance(results, list) else 0} results, expected 5')
+        return caption, None, None, None, None, None
     return caption, get_top_item(results[0]), get_top_item(results[1]), get_top_item(results[2]), get_top_item(results[3]), get_top_item(results[4])
 
 

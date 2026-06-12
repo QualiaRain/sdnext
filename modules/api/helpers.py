@@ -28,7 +28,17 @@ def decode_base64_to_image(encoding, quiet=False):
     if isinstance(encoding, str) and encoding.startswith("upload:"):
         return _resolve_upload_ref(encoding, quiet)
     if encoding.startswith("data:image/"):
-        encoding = encoding.split(";")[1].split(",")[1]
+        parts = encoding.split(";")
+        if len(parts) > 1:
+            data_parts = parts[1].split(",")
+            if len(data_parts) > 1:
+                encoding = data_parts[1]
+            else:
+                log.warning('API malformed data URI: missing comma separator')
+                return None
+        else:
+            log.warning('API malformed data URI: missing semicolon separator')
+            return None
     try:
         decoded = base64.b64decode(encoding)
         data = io.BytesIO(decoded)
