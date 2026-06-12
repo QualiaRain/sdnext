@@ -243,6 +243,8 @@ def vae_postprocess(tensor, model, output_type='np'):
         if torch.is_tensor(tensor):
             if tensor.ndim == 3 and tensor.shape[0] == 3:
                 tensor = tensor.unsqueeze(0)
+            model_cls = model.__class__.__name__
+            log_debug(f'VAE postprocess: model={model_cls} tensor_shape={tensor.shape if hasattr(tensor, "shape") else None} ndim={tensor.ndim if hasattr(tensor, "ndim") else None}')
             if hasattr(model, 'video_processor'):
                 if tensor.ndim == 6 and tensor.shape[1] == 1:
                     tensor = tensor.squeeze(0)
@@ -250,8 +252,18 @@ def vae_postprocess(tensor, model, output_type='np'):
                 if isinstance(images, list) and len(images) > 0 and isinstance(images[0], list):
                     images = [frame for batch in images for frame in batch]
             elif hasattr(model, 'image_processor'):
-                if tensor.ndim == 5 and tensor.shape[1] == 3: # Qwen Image
-                    tensor = tensor[:, :, 0]
+                if tensor.ndim == 5:
+                    is_edit_model = 'Edit' in model_cls or 'Layered' in model_cls
+                    if tensor.shape[1] == 3:
+                        if is_edit_model:
+                            log_debug(f'VAE postprocess: Qwen Edit model detected, squeezing depth dim from {tensor.shape}')
+                            tensor = tensor[:, :, 0, :, :]
+                        else:
+                            tensor = tensor[:, :, 0]
+                    elif is_edit_model and tensor.shape[1] > 3:
+                        log_debug(f'VAE postprocess: Qwen Edit model with {tensor.shape[1]} channels, selecting first 3 from {tensor.shape}')
+                        tensor = tensor[:, :3, 0, :, :]
+                log_debug(f'VAE postprocess: after squeeze tensor_shape={tensor.shape}')
                 images = model.image_processor.postprocess(tensor, output_type=output_type)
             elif hasattr(model, "vqgan"):
                 images = tensor.permute(0, 2, 3, 1).cpu().float().numpy()
@@ -260,13 +272,23 @@ def vae_postprocess(tensor, model, output_type='np'):
             else:
                 from diffusers.image_processor import VaeImageProcessor
                 model.image_processor = VaeImageProcessor()
-                if tensor.ndim == 5 and tensor.shape[1] == 3: # Qwen Image
-                    tensor = tensor[:, :, 0]
+                if tensor.ndim == 5:
+                    is_edit_model = 'Edit' in model_cls or 'Layered' in model_cls
+                    if tensor.shape[1] == 3:
+                        if is_edit_model:
+                            log_debug(f'VAE postprocess: Qwen Edit model detected, squeezing depth dim from {tensor.shape}')
+                            tensor = tensor[:, :, 0, :, :]
+                        else:
+                            tensor = tensor[:, :, 0]
+                    elif is_edit_model and tensor.shape[1] > 3:
+                        log_debug(f'VAE postprocess: Qwen Edit model with {tensor.shape[1]} channels, selecting first 3 from {tensor.shape}')
+                        tensor = tensor[:, :3, 0, :, :]
+                log_debug(f'VAE postprocess: after squeeze tensor_shape={tensor.shape}')
                 images = model.image_processor.postprocess(tensor, output_type=output_type)
         else:
             images = tensor if isinstance(tensor, list) or isinstance(tensor, np.ndarray) else [tensor]
     except Exception as e:
-        log.error(f'VAE postprocess: {e}')
+        log.error(f'VAE postprocess: model={model.__class__.__name__} tensor_shape={tensor.shape if hasattr(tensor, "shape") else None} error={e}')
         errors.display(e, 'VAE')
     return images
 
