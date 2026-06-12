@@ -20,8 +20,16 @@ exclude = ['a', 'in', 'on', 'out', 'at', 'the', 'and', 'with', 'next', 'to', 'it
 
 def decode(encoding):
     if encoding.startswith("data:image/"):
-        encoding = encoding.split(";")[1].split(",")[1]
-    return Image.open(io.BytesIO(base64.b64decode(encoding)))
+        parts = encoding.split(";")
+        if len(parts) > 1:
+            parts = parts[1].split(",")
+            if len(parts) > 1:
+                encoding = parts[1]
+            else:
+                encoding = ''
+        else:
+            encoding = ''
+    return Image.open(io.BytesIO(base64.b64decode(encoding))) if encoding else None
 
 
 def encode(f):

@@ -339,6 +339,7 @@ def branch(folder=None):
     branches = []
     try:
         b = git('branch --show-current', folder, optional=True)
+        branches = []
         if b == '':
             branches = git('branch', folder).split('\n')
         if len(branches) > 0:
@@ -498,7 +499,11 @@ def check_diffusers():
     # if args.use_rocm or args.use_zluda or args.use_directml:
     #     sha = '043ab2520f6a19fce78e6e060a68dbc947edb9f9' # lock diffusers versions for now
     pkg = package_spec('diffusers')
-    minor = int(pkg.version.split('.')[1] if pkg is not None else -1)
+    if pkg is not None:
+        version_parts = pkg.version.split('.')
+        minor = int(version_parts[1]) if len(version_parts) > 1 else -1
+    else:
+        minor = -1
     current = opts.get('diffusers_version', '') if minor > -1 else ''
     if (minor == -1) or ((current != target_commit) and (not args.experimental)):
         if minor == -1:

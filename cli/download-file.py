@@ -18,7 +18,12 @@ headers = {
 
 
 def get_filename(args, res):
-    content_fn = (res.headers.get('content-disposition', '').split('filename=')[1]).strip().strip('\"') if 'filename=' in res.headers.get('content-disposition', '') else None
+    content_fn = None
+    disposition = res.headers.get('content-disposition', '')
+    if 'filename=' in disposition:
+        parts = disposition.split('filename=')
+        if len(parts) > 1:
+            content_fn = parts[1].strip().strip('\"')
     return args.file or content_fn or next(tempfile._get_candidate_names()) # pylint: disable=protected-access
 
 

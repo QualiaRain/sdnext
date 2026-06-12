@@ -163,7 +163,9 @@ def caption_image(res: Result, tag: str | None = None):
                 for t in res.tag.split(',')[::-1]:
                     tags.insert(0, t.strip())
     pos = 0 if len(tags) == 0 else 1
-    tags.insert(pos, caption.split(' ')[1])
+    caption_parts = caption.split(' ')
+    if len(caption_parts) > 1:
+        tags.insert(pos, caption_parts[1])
     tags = [t for t in tags if len(t) > 2]
     if len(tags) > options.process.tag_limit:
         tags = tags[:options.process.tag_limit]

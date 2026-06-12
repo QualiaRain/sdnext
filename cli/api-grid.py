@@ -114,8 +114,14 @@ def grid(x_file: str, y_file: str):
     log.info(server)
     os.makedirs(server.folder, exist_ok=True)
     try:
-        x = open(x_file, encoding='utf8').read().splitlines() if x_file is not None else []
-        y = open(y_file, encoding='utf8').read().splitlines() if y_file is not None else []
+        x = []
+        if x_file is not None:
+            with open(x_file, encoding='utf8') as f:
+                x = f.read().splitlines()
+        y = []
+        if y_file is not None:
+            with open(y_file, encoding='utf8') as f:
+                y = f.read().splitlines()
     except Exception as e:
         log.error(f'read file: x={x_file} y={y_file} {e}')
         return
