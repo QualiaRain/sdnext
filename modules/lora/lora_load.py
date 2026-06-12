@@ -130,10 +130,13 @@ def load_safetensors(name, network_on_disk: network.NetworkOnDisk) -> network.Ne
         parts = key_network.split('.')
         if len(parts) > 0 and parts[0] == "bundle_emb":
             if len(parts) > 1:
-                emb_name, vec_name = parts[1], key_network.split(".", 2)[-1]
-                emb_dict = bundle_embeddings.get(emb_name, {})
-                emb_dict[vec_name] = weight
-                bundle_embeddings[emb_name] = emb_dict
+                emb_name = parts[1]
+                split_parts = key_network.split(".", 2)
+                vec_name = split_parts[-1] if len(split_parts) > 0 else ''
+                if vec_name:
+                    emb_dict = bundle_embeddings.get(emb_name, {})
+                    emb_dict[vec_name] = weight
+                    bundle_embeddings[emb_name] = emb_dict
             continue
         if parts[0] in ["clip_l","clip_g","t5","unet","transformer"]:
             network_part = []

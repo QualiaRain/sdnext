@@ -377,6 +377,7 @@ def reprocess(gallery):
         i0.load() # wait for info to be populated
         i1.info = i0.info
         info, _params = images.read_info_from_image(i0)
+        i0.close() # close file handle after loading
         if shared.opts.samples_save:
             images.save_image(i1, info=info, forced_filename=fn)
             i1.already_saved_as = fn

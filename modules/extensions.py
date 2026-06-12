@@ -168,7 +168,8 @@ class Extension:
                 if len(repo.remotes) == 0:
                     log.debug(f"Extension: no remotes info repo={self.name}")
                     return
-                self.git_name = repo.remotes.origin.url.split('.git')[0].split('/')[-1]
+                url_parts = repo.remotes.origin.url.split('.git')[0].split('/')
+                self.git_name = url_parts[-1] if url_parts else ''
                 self.description = repo.description
                 if self.description is None or self.description.startswith("Unnamed repository"):
                     self.description = "[No description]"

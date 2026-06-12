@@ -185,8 +185,14 @@ class DownloadManager:
             if not item.filename or item.filename == "Unknown":
                 cn = r.headers.get('content-disposition', '')
                 if 'filename=' in cn:
-                    item.filename = cn.split('filename=')[-1].strip('"')
-                    final_file = os.path.join(item.folder, item.filename)
+                    fn_parts = cn.split('filename=')
+                    if len(fn_parts) > 0:
+                        item.filename = fn_parts[-1].strip('"').strip()
+                        final_file = os.path.join(item.folder, item.filename)
+                    else:
+                        final_file = None
+                else:
+                    final_file = None
 
             block_size = 65536  # 64KB blocks
             written = starting_pos

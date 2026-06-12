@@ -109,15 +109,17 @@ def get_images(input_images):
 
 def get_scales(adapter_scales, adapter_images):
     output_scales = [adapter_scales] if not isinstance(adapter_scales, list) else adapter_scales
-    while len(output_scales) < len(adapter_images):
-        output_scales.append(output_scales[-1])
+    if len(output_scales) > 0:
+        while len(output_scales) < len(adapter_images):
+            output_scales.append(output_scales[-1])
     return output_scales
 
 
 def get_crops(adapter_crops, adapter_images):
     output_crops = [adapter_crops] if not isinstance(adapter_crops, list) else adapter_crops
-    while len(output_crops) < len(adapter_images):
-        output_crops.append(output_crops[-1])
+    if len(output_crops) > 0:
+        while len(output_crops) < len(adapter_images):
+            output_crops.append(output_crops[-1])
     return output_crops
 
 

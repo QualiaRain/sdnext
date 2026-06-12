@@ -281,7 +281,12 @@ if sys.platform == "win32":
         out = out.strip()
         if out == "":
             return []
-        return [Agent(x.split(' ')[-1].strip()) for x in out.split("\n")]
+        agents = []
+        for x in out.split("\n"):
+            parts = x.split(' ')
+            if len(parts) > 0:
+                agents.append(Agent(parts[-1].strip()))
+        return agents
 
     def postinstall():
         import torch

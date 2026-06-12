@@ -57,9 +57,12 @@ def install_nunchaku(force=False):
             return result.returncode == 0
         else:
             import torch
-            torch_ver = '.'.join(torch.__version__.split('+')[0].split('.')[:2])
-            cuda_ver = torch.__version__.split('+')[1]if '+' in torch.__version__ else None
-            cuda_ver = cuda_ver[:4] + '.' + cuda_ver[-1] if cuda_ver and len(cuda_ver) >= 4 else None
+            torch_base = torch.__version__.split('+')[0]
+            torch_parts = torch_base.split('.')
+            torch_ver = '.'.join(torch_parts[:2]) if len(torch_parts) >= 2 else torch_base
+            plus_parts = torch.__version__.split('+')
+            cuda_ver = plus_parts[1] if len(plus_parts) > 1 else None
+            cuda_ver = cuda_ver[:4] + '.' + cuda_ver[-1] if cuda_ver and len(cuda_ver) >= 5 else cuda_ver
             suffix = 'linux_x86_64' if arch == 'linux' else 'win_amd64'
             if cuda_ver is None:
                 log.error(f'Nunchaku: torch={torch.__version__} cuda="unknown"')

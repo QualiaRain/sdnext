@@ -209,8 +209,13 @@ def img2img(id_task: str, state: str, mode: int,
             return [], '', '', 'Error: init image with mask not provided'
         image = init_img_with_mask["image"]
         mask = init_img_with_mask["mask"]
-        alpha_mask = ImageOps.invert(image.split()[-1]).convert('L').point(lambda x: 255 if x > 0 else 0, mode='1')
-        mask = ImageChops.lighter(alpha_mask, mask.convert('L')).convert('L')
+        image_bands = image.split()
+        if len(image_bands) > 0:
+            alpha_band = image_bands[-1]
+            alpha_mask = ImageOps.invert(alpha_band).convert('L').point(lambda x: 255 if x > 0 else 0, mode='1')
+            mask = ImageChops.lighter(alpha_mask, mask.convert('L')).convert('L')
+        else:
+            mask = mask.convert('L')
         image = image.convert("RGB")
     elif mode == 2:  # sketch
         if sketch is None:

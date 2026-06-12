@@ -24,10 +24,10 @@ def get_text(caption):
 
     existing_text_list = set()
 
-    if caption[0]=='\"' and caption[-1]=='\"':
+    if len(caption) >= 2 and caption[0]=='\"' and caption[-1]=='\"':
         caption=caption[1:-2]
 
-    if caption[0]=='\'' and caption[-1]=='\'':
+    if len(caption) >= 2 and caption[0]=='\'' and caption[-1]=='\'':
         caption=caption[1:-2]
 
     text_list=[]

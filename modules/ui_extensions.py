@@ -336,7 +336,14 @@ def create_html(search_text, sort_column):
         updated = datetime.now(timezone.utc) # TZ-aware
         try:
             if 'github' in ext['url']:
-                author = 'Author: ' + ext['url'].split('/')[-2].split(':')[-1] if '/' in ext['url'] else ext['url'].split(':')[1].split('/')[0]
+                url_parts = ext['url'].split('/')
+                if len(url_parts) > 1:
+                    colon_parts = url_parts[-2].split(':')
+                    author = 'Author: ' + (colon_parts[-1] if colon_parts else '')
+                else:
+                    colon_parts = ext['url'].split(':')
+                    slash_parts = colon_parts[1].split('/') if len(colon_parts) > 1 else []
+                    author = 'Author: ' + (slash_parts[0] if slash_parts else '')
                 updated = extensions.parse_isotime(ext.get('updated', '2000-01-01T00:00:00Z')) # TZ-aware
             else:
                 debug(f'Extension not from github: name={ext["name"]} url={ext["url"]}')

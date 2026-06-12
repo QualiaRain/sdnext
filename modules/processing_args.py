@@ -157,10 +157,12 @@ def task_specific_kwargs(p, model):
         if len(p.init_images) == 0:
             log.error('BLiP diffusion requires init image')
             return task_args
+        neg_prompt_parts = getattr(p, 'negative_prompt', '').split()
+        pos_prompt_parts = getattr(p, 'prompt', '').split()
         task_args = {
             'reference_image': p.init_images[0],
-            'source_subject_category': getattr(p, 'negative_prompt', '').split()[-1],
-            'target_subject_category': getattr(p, 'prompt', '').split()[-1],
+            'source_subject_category': neg_prompt_parts[-1] if neg_prompt_parts else '',
+            'target_subject_category': pos_prompt_parts[-1] if pos_prompt_parts else '',
             'output_type': 'pil',
         }
 
