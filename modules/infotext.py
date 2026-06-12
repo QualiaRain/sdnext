@@ -68,7 +68,10 @@ def parse(infotext):
         val = unquote(val).strip(" ,\n").replace('\\\n', '')
         size = re_size.match(val)
         if val.replace('.', '', 1).isdigit():
-            params[key] = float(val) if '.' in val else int(val)
+            try:
+                params[key] = float(val) if '.' in val else int(val)
+            except (ValueError, TypeError):
+                params[key] = val
         elif val == "True":
             params[key] = True
         elif val == "False":

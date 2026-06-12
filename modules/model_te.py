@@ -37,7 +37,11 @@ def load_t5(name=None, cache_dir=None):
         with open(os.path.join('configs', 'flux', 'text_encoder_2', 'config.json'), encoding='utf8') as f:
             t5_config = transformers.T5Config(**json.load(f))
         state_dict = load_file(fn)
-        dtype = state_dict['encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight'].dtype
+        dtype_key = 'encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight'
+        if dtype_key in state_dict:
+            dtype = state_dict[dtype_key].dtype
+        else:
+            dtype = torch.float32
         with torch.device("meta"):
             t5 = transformers.T5EncoderModel(t5_config).to(dtype=dtype)
         for param_name, param in state_dict.items():
@@ -77,7 +81,7 @@ def load_t5(name=None, cache_dir=None):
     elif '/' in name:
         log.debug(f'Load model: type=T5 repo={name}')
         quant_config = model_quant.create_config(module='TE')
-        if quantization_config is not None:
+        if quant_config is not None:
             t5 = transformers.T5EncoderModel.from_pretrained(name, cache_dir=cache_dir, torch_dtype=devices.dtype, **quant_config)
 
     else:

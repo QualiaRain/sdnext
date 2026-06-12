@@ -57,8 +57,10 @@ def cmdargs(line):
     res = {}
     while pos < len(args):
         arg = args[pos]
-        assert arg.startswith("--"), f'must start with "--": {arg}'
-        assert pos+1 < len(args), f'missing argument for command line option {arg}'
+        if not arg.startswith("--"):
+            raise ValueError(f'Argument must start with "--": {arg}')
+        if pos + 1 >= len(args):
+            raise ValueError(f'Missing argument for command line option {arg}')
         tag = arg[2:]
         if tag == "prompt" or tag == "negative_prompt":
             pos += 1
