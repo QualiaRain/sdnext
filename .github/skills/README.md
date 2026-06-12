@@ -4,6 +4,12 @@ This folder contains repo-local Copilot skills for recurring SD.Next tasks.
 
 ## Available Skills
 
+- `ai-disclosure`
+  File: `ai-disclosure/SKILL.md`
+  Use when preparing any upstream-facing PR, issue, or comment. Governs the
+  standardized disclosure line, understanding tiers, retroactive-update policy,
+  and pre-submission checklist.
+
 - `port-model`
   File: `port-model/SKILL.md`
   Use when adding or porting a model family into SD.Next and Diffusers.
