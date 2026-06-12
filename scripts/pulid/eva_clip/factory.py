@@ -77,7 +77,9 @@ def get_tokenizer(model_name):
 
 
 # loading openai CLIP weights when is_openai=True for training
-def load_state_dict(checkpoint_path: str, map_location: str='cpu', model_key: str='model|module|state_dict', is_openai: bool=False, skip_list: list=[]):
+def load_state_dict(checkpoint_path: str, map_location: str='cpu', model_key: str='model|module|state_dict', is_openai: bool=False, skip_list: list | None=None):
+    if skip_list is None:
+        skip_list = []
     if is_openai:
         model = torch.jit.load(checkpoint_path, map_location="cpu").eval()
         state_dict = model.state_dict()
@@ -128,7 +130,9 @@ def load_checkpoint(model, checkpoint_path, model_key="model|module|state_dict",
     logging.info(f"incompatible_keys.missing_keys: {incompatible_keys.missing_keys}")
     return incompatible_keys
 
-def load_clip_visual_state_dict(checkpoint_path: str, map_location: str='cpu', is_openai: bool=False, skip_list:list=[]):
+def load_clip_visual_state_dict(checkpoint_path: str, map_location: str='cpu', is_openai: bool=False, skip_list: list | None=None):
+    if skip_list is None:
+        skip_list = []
     state_dict = load_state_dict(checkpoint_path, map_location=map_location, is_openai=is_openai, skip_list=skip_list)
 
     for k in list(state_dict.keys()):
@@ -141,7 +145,9 @@ def load_clip_visual_state_dict(checkpoint_path: str, map_location: str='cpu', i
             del state_dict[k]
     return state_dict
 
-def load_clip_text_state_dict(checkpoint_path: str, map_location: str='cpu', is_openai: bool=False, skip_list:list=[]):
+def load_clip_text_state_dict(checkpoint_path: str, map_location: str='cpu', is_openai: bool=False, skip_list: list | None=None):
+    if skip_list is None:
+        skip_list = []
     state_dict = load_state_dict(checkpoint_path, map_location=map_location, is_openai=is_openai, skip_list=skip_list)
 
     for k in list(state_dict.keys()):
@@ -168,7 +174,9 @@ def load_pretrained_checkpoint(
         visual_model=None,
         text_model=None,
         model_key="model|module|state_dict",
-        skip_list=[]):
+        skip_list: list | None=None):
+    if skip_list is None:
+        skip_list = []
     visual_tag = get_pretrained_tag(visual_model)
     text_tag = get_pretrained_tag(text_model)
 
@@ -199,7 +207,7 @@ def load_pretrained_checkpoint(
         elif text_tag == "clip":
             text_state_dict = load_clip_text_state_dict(text_checkpoint_path, is_openai=True, skip_list=skip_list)
         else:
-            text_state_dict = load_state_dict(visual_checkpoint_path, model_key=model_key, is_openai=False, skip_list=skip_list)
+            text_state_dict = load_state_dict(text_checkpoint_path, model_key=model_key, is_openai=False, skip_list=skip_list)
 
         text_incompatible_keys = model.text.load_state_dict(text_state_dict, strict=strict)
 
@@ -223,8 +231,10 @@ def create_model(
         pretrained_visual_model: str | None = None,
         pretrained_text_model: str | None = None,
         cache_dir: Optional[str] = None,
-        skip_list: list  = [],
+        skip_list: list | None = None,
 ):
+    if skip_list is None:
+        skip_list = []
     model_name = model_name.replace('/', '-')  # for callers using old naming with / in ViT names
     if isinstance(device, str):
         device = torch.device(device)
@@ -314,7 +324,7 @@ def create_model(
             if pretrained_text:
                 pretrained_text_model = pretrained_text_model.replace('/', '-')  # for callers using old naming with / in ViT names
                 pretrained_text_cfg = get_pretrained_cfg(pretrained_text_model, pretrained_text)
-                if pretrained_image_cfg:
+                if pretrained_text_cfg:
                     text_checkpoint_path = download_pretrained(pretrained_text_cfg, cache_dir=cache_dir)
                 elif os.path.exists(pretrained_text):
                     text_checkpoint_path = pretrained_text
@@ -372,8 +382,10 @@ def create_model_and_transforms(
         image_mean: Optional[Tuple[float, ...]] = None,
         image_std: Optional[Tuple[float, ...]] = None,
         cache_dir: Optional[str] = None,
-        skip_list: list = [],
+        skip_list: list | None = None,
 ):
+    if skip_list is None:
+        skip_list = []
     model = create_model(
         model_name,
         pretrained,
@@ -427,8 +439,10 @@ def create_transforms(
         image_mean: Optional[Tuple[float, ...]] = None,
         image_std: Optional[Tuple[float, ...]] = None,
         cache_dir: Optional[str] = None,
-        skip_list: list = [],
+        skip_list: list | None = None,
 ):
+    if skip_list is None:
+        skip_list = []
     model = create_model(
         model_name,
         pretrained,
