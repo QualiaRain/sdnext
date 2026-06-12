@@ -343,10 +343,12 @@ def branch(folder=None):
         if b == '':
             branches = git('branch', folder).split('\n')
         if len(branches) > 0:
-            b = [x for x in branches if x.startswith('*')][0]
-            if 'detached' in b and len(branches) > 1:
-                b = branches[1].strip()
-                log.debug(f'Git detached head detected: folder="{folder}" reattach={b}')
+            active_branches = [x for x in branches if x.startswith('*')]
+            if active_branches:
+                b = active_branches[0]
+                if 'detached' in b and len(branches) > 1:
+                    b = branches[1].strip()
+                    log.debug(f'Git detached head detected: folder="{folder}" reattach={b}')
     except Exception:
         b = git('git rev-parse --abbrev-ref HEAD', folder, optional=True)
     if 'main' in b:
@@ -1144,7 +1146,10 @@ def install_submodules(force=True):
     res = []
     for submodule in submodules:
         try:
-            name = submodule.split()[1].strip()
+            parts = submodule.split()
+            if len(parts) < 2:
+                continue
+            name = parts[1].strip()
             if args.upgrade:
                 res.append(update(name))
             else:

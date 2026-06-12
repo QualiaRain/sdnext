@@ -451,12 +451,12 @@ if __name__ == "__main__":
                 idx = prop.index(0x67, idx) + 1
             except ValueError:
                 break
-            if prop[idx] != 0x66:
+            if idx >= len(prop) or prop[idx] != 0x66:
                 continue
-            if prop[idx + 1] != 0x78:
+            if idx + 1 >= len(prop) or prop[idx + 1] != 0x78:
                 continue
             idx = idx + 2
-            while prop[idx] != 0x00:
+            while idx < len(prop) and prop[idx] != 0x00:
                 c = prop[idx]
                 idx += 1
                 if (c < 0x30 or c > 0x39) and (c < 0x61 or c > 0x66):
