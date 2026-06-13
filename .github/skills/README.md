@@ -76,6 +76,14 @@ This folder contains repo-local Copilot skills for recurring SD.Next tasks.
   File: `update-docs/SKILL.md`
   Use when reading markdown files from `wiki/` to correct markdown syntax, improve readability, and optionally normalize structure/links while preserving technical meaning.
 
+- `find-bugs`
+  File: `find-bugs/SKILL.md`
+  Use when running a scoped, anti-quota-filling bug hunt across SD.Next subsystems — locks each finder agent to one area, restricts to high-evidence bug classes, and forbids fix-proposals and self-grading.
+
+- `verify-bugs`
+  File: `verify-bugs/SKILL.md`
+  Use when adversarially verifying claimed bugs against current dev before any fix or PR — assigns REAL/WEAK/BOGUS/STALE/HARMFUL verdicts with reproduction-level evidence and screens proposed fixes for regressions.
+
 ## Notes
 
 - Keep skills narrowly task-oriented and reusable.
