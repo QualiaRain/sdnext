@@ -120,7 +120,7 @@ class History:
             return
         item = Item(latent, preview, info, ops, images)
         self.latents.appendleft(item)
-        if self.count >= shared.opts.latent_history:
+        while self.count > shared.opts.latent_history:
             self.latents.pop()
         log.debug(f'History: len={self.count} add={item}')
 

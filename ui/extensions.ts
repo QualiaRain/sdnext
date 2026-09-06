@@ -63,7 +63,7 @@ export function update_extension(button: HTMLButtonElement | HTMLInputElement, u
   updateInput(textarea);
   log('Extension update:', { url });
   const updateBtn = gradioApp().querySelector('#update_extension_button');
-  if (updateBtn instanceof HTMLInputElement) updateBtn.click();
+  if (updateBtn instanceof HTMLElement) updateBtn.click();
 }
 
 window.extensions_apply = extensions_apply;
