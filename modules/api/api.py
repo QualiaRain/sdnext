@@ -76,7 +76,7 @@ class Api:
         self.add_api_route("/sdapi/v1/extra-single-image", self.process.extras_single_image_api, methods=["POST"], response_model=models.ResProcessImage, tags=["Processing"])
         self.add_api_route("/sdapi/v1/process-batch", self.process.extras_batch_images_api, methods=["POST"], response_model=models.ResProcessBatch, tags=["Processing"])
         self.add_api_route("/sdapi/v1/extra-batch-images", self.process.extras_batch_images_api, methods=["POST"], response_model=models.ResProcessBatch, tags=["Processing"])
-        self.add_api_route("/sdapi/v1/preprocess", self.process.post_preprocess, methods=["POST"], response_model=models.ResPreprocess, tags=["Processing"])
+        self.add_api_route("/sdapi/v1/preprocess", self.process.post_preprocess, methods=["POST"], response_model=process.ResPreprocess, tags=["Processing"])
         self.add_api_route("/sdapi/v1/mask", self.process.post_mask, methods=["POST"], response_model=process.ResMask, tags=["Processing"])
         self.add_api_route("/sdapi/v1/detect", self.process.post_detect, methods=["POST"], response_model=process.ResFace, tags=["Processing"])
         self.add_api_route("/sdapi/v1/detail", self.process.post_detail, methods=["POST"], response_model=models.ResDetail, tags=["Processing"])

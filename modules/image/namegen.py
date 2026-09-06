@@ -55,7 +55,7 @@ class FilenameGenerator:
         'prompt_hash': lambda self: hashlib.sha256(self.prompt.encode()).hexdigest()[0:8],
 
         'sampler': lambda self: self.p and self.p.sampler_name,
-        'seed': lambda self: (hasattr(self, "seed") and self.seed and str(self.seed)) or '',
+        'seed': lambda self: str(self.seed) if hasattr(self, 'seed') else '',
         'steps': lambda self: self.p and getattr(self.p, 'steps', 0),
         'cfg': lambda self: self.p and getattr(self.p, 'cfg_scale', 0),
         'pag': lambda self: self.p and getattr(self.p, 'cfg_true', 0),
@@ -73,7 +73,7 @@ class FilenameGenerator:
             return
         else:
             debug_log(f'Filename generator init: seed={seed} prompt="{prompt}"')
-        if seed is not None and int(seed) > 0:
+        if seed is not None and int(seed) >= 0:
             self.seed = seed
         elif p is not None and getattr(p, 'all_seeds', None) is not None and len(p.all_seeds) > 0:
             self.seed = p.all_seeds[0] if p.all_seeds[0] is not None and int(p.all_seeds[0]) > 0 else 0
@@ -288,7 +288,7 @@ class FilenameGenerator:
                 _pattern, arg = m.groups()
                 pattern_args.insert(0, arg)
 
-            fun = self.replacements.get(pattern.lower(), None)
+            fun = self.replacements.get(_pattern.lower(), None)
             if fun is not None:
                 try:
                     replacement = fun(self, *pattern_args)

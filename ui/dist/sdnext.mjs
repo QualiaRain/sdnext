@@ -13420,8 +13420,8 @@ var GalleryFolder = class _GalleryFolder extends HTMLElement {
   constructor(folder) {
     super();
     if (typeof folder === "object" && folder !== null) {
-      this.name = decodeURI(folder.path || "");
-      this.label = decodeURI(folder.label || folder.path || "");
+      this.name = folder.path || "";
+      this.label = folder.label || folder.path || "";
     } else {
       this.name = decodeURI(folder);
       this.label = this.name;

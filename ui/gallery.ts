@@ -418,8 +418,8 @@ class GalleryFolder extends HTMLElement {
     super();
     // Support both old format (string) and new format (object with path and label)
     if (typeof folder === 'object' && folder !== null) {
-      this.name = decodeURI(folder.path || '');
-      this.label = decodeURI(folder.label || folder.path || '');
+      this.name = folder.path || '';
+      this.label = folder.label || folder.path || '';
     } else {
       this.name = decodeURI(folder);
       this.label = this.name;

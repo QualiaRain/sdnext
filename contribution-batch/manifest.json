@@ -1,0 +1,100 @@
+{
+  "repository": "vladmandic/sdnext",
+  "fork": "QualiaRain/sdnext",
+  "owner": "QualiaRain",
+  "base": "dev",
+  "verified_base": "ddec927c90021257ad7f46a044f2da0db9b17009",
+  "pull_requests": [
+    {
+      "id": "filename",
+      "title": "fix(images): expand filename patterns with arguments",
+      "branch": "fix/filename-pattern-arguments",
+      "head_sha": "94ba4330b7fa8f4a960f9c54dec51110450f78df",
+      "body_file": "prs/01-filename.md",
+      "files": [
+        "modules/image/namegen.py",
+        "test/test-namegen-patterns.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/filename-pattern-arguments?expand=1",
+      "body_sha256": "f610311396e6bcf7dbbf7c5361fbc2e1ca48f32b0aa1f7ba9426d473f34568c1"
+    },
+    {
+      "id": "wildcard",
+      "title": "fix(styles): expand inline choices inside wildcard files",
+      "branch": "fix/file-wildcard-inline-choices",
+      "head_sha": "81cd55e8ff4fd2b753dab6cb855fb45f23e83aad",
+      "body_file": "prs/02-wildcard.md",
+      "files": [
+        "modules/styles.py",
+        "test/test-file-wildcards.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/file-wildcard-inline-choices?expand=1",
+      "body_sha256": "7e13ca0f3c62fbc3901b7f443078293c455f6a5432c2ad8bcaa04e0437fe4839"
+    },
+    {
+      "id": "preprocess",
+      "title": "fix(api): use the preprocessing response schema",
+      "branch": "fix/preprocess-response-schema",
+      "head_sha": "a111e6876b05bfaa8d8c838e1293482ac5f19d26",
+      "body_file": "prs/03-preprocess.md",
+      "files": [
+        "modules/api/api.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/preprocess-response-schema?expand=1",
+      "body_sha256": "1fea839b6d42b7d366f9a0877a3eaa955d70ce9ec4f4d429b793454a7c9e0e9d"
+    },
+    {
+      "id": "promptseed",
+      "title": "fix(api): preserve zero seed in prompt enhancement",
+      "branch": "fix/prompt-enhance-zero-seed",
+      "head_sha": "49effaa461f17302b2fcd2125ded6220282c1e25",
+      "body_file": "prs/04-promptseed.md",
+      "files": [
+        "modules/api/process.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/prompt-enhance-zero-seed?expand=1",
+      "body_sha256": "9a4cb9f4b9ab0a5f09061cf4e1dce47c84a79983cde1815d0c8d3917efb2ac80"
+    },
+    {
+      "id": "fileseed",
+      "title": "fix(images): preserve zero seeds in filenames",
+      "branch": "fix/filename-zero-seed",
+      "head_sha": "915920aa2dc5c357d65a8562a74e25e4892e6e1d",
+      "body_file": "prs/05-fileseed.md",
+      "files": [
+        "modules/image/namegen.py",
+        "test/test-namegen-seed.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/filename-zero-seed?expand=1",
+      "body_sha256": "f2c234a1ae6612775b4e32d92f0c2bcdf2f1abb46398eaa892dc6fb5746cbba6"
+    },
+    {
+      "id": "gallery",
+      "title": "fix(gallery): preserve raw folder paths from the API",
+      "branch": "fix/gallery-raw-folder-names",
+      "head_sha": "c4a95d677cc4dabac6cc8d785a5f8ae95363795d",
+      "body_file": "prs/06-gallery.md",
+      "files": [
+        "test/test-gallery-folders.mjs",
+        "ui/dist/sdnext.mjs",
+        "ui/dist/sdnext.mjs.map",
+        "ui/gallery.ts"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/gallery-raw-folder-names?expand=1",
+      "body_sha256": "777e628f79930ce8e21aa1cecade5bc762d9d28b050c5bbc5a7dba943c3c1463"
+    },
+    {
+      "id": "wildcardpath",
+      "title": "fix(styles): match wildcard paths on complete components",
+      "branch": "fix/wildcard-path-boundaries",
+      "head_sha": "7aa48187f01eb19462730fbb43c702e9b186e351",
+      "body_file": "prs/07-wildcardpath.md",
+      "files": [
+        "modules/styles.py",
+        "test/test-wildcard-paths.py"
+      ],
+      "compare_url": "https://github.com/vladmandic/sdnext/compare/dev...QualiaRain:sdnext:fix/wildcard-path-boundaries?expand=1",
+      "body_sha256": "49efc2ff266325d21647e2cf4267e6903049ff494fd1922db010df263ff7f400"
+    }
+  ]
+}
