@@ -16259,7 +16259,7 @@ function update_extension(button, url2) {
   updateInput2(textarea);
   log("Extension update:", { url: url2 });
   const updateBtn = gradioApp().querySelector("#update_extension_button");
-  if (updateBtn instanceof HTMLInputElement) updateBtn.click();
+  if (updateBtn instanceof HTMLElement) updateBtn.click();
 }
 window.extensions_apply = extensions_apply;
 window.extensions_check = extensions_check;
