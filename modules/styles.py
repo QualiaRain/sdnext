@@ -94,7 +94,7 @@ def apply_curly_braces_to_prompt(prompt, seed=-1):
     if not isinstance(prompt, str) or len(prompt) == 0:
         return prompt
     old_state = None
-    if seed > 0:
+    if seed >= 0:
         old_state = random.getstate()
         random.seed(seed)
     prompt = prompt.strip()
@@ -182,7 +182,7 @@ def apply_wildcards_to_prompt(prompt, all_wildcards, seed=-1, silent=False, p: S
     if prompt is None or len(prompt) == 0:
         return prompt
     old_state = None
-    if seed > 0 and len(all_wildcards) > 0:
+    if seed >= 0 and len(all_wildcards) > 0:
         old_state = random.getstate()
         random.seed(seed)
     replaced = {}
@@ -418,7 +418,7 @@ class StyleDatabase:
         random_state = random.getstate()
 
         for i in range(len(prompts)):
-            if seeds[i]> 0:
+            if seeds[i] >= 0:
                 random.seed(seeds[i])
             prompt = prompts[i]
             prompt = apply_curly_braces_to_prompt(prompt, seeds[i])
@@ -426,7 +426,7 @@ class StyleDatabase:
             prompt = apply_wildcards_to_prompt(prompt, [self.find_style(x).wildcards for x in styles], seeds[i], p=p)
             parsed_positive.append(prompt)
         for i in range(len(negatives)):
-            if seeds[i]> 0:
+            if seeds[i] >= 0:
                 random.seed(seeds[i])
             prompt = negatives[i]
             prompt = apply_curly_braces_to_prompt(prompt, seeds[i])
