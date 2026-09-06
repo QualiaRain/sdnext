@@ -140,6 +140,7 @@ def apply_file_wildcards(prompt, replaced = None, not_found = None, recursion=0,
                         lines = [line for line in lines if len(line) > 0]
                         if len(lines) > 0:
                             choice = random.choice(lines)
+                            choice = apply_curly_braces_to_prompt(choice)
                             if '|' in choice:
                                 choice = random.choice(choice.split('|')).strip(' []{}\n')
                             prompt = prompt.replace(f"__{wildcard}__", choice, 1)
