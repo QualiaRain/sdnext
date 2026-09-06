@@ -216,8 +216,7 @@ class APIProcess:
     def post_prompt_enhance(self, req: models.ReqPromptEnhance):
         """Enhance a prompt using an LLM. Supports text, image-conditioned, and video prompt enhancement modes."""
         from modules import processing_helpers
-        seed = req.seed or -1
-        seed = processing_helpers.get_fixed_seed(seed)
+        seed = processing_helpers.get_fixed_seed(req.seed)
         prompt = ''
         from modules.scripts_manager import scripts_control
         default_model = 'google/gemma-3-4b-it' if req.type == 'image' else 'google/gemma-3-1b-it'
