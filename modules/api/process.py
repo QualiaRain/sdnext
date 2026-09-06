@@ -83,9 +83,11 @@ class APIProcess:
             if k not in processors.config[processor.processor_id]['params']:
                 return JSONResponse(status_code=400, content={"error": f"Processor invalid parameter: id={req.model} {k}={v}"})
         jobid = shared.state.begin('API-PRE', api=True)
-        processed = processor(image, local_config=req.params)
-        image = encode_pil_to_base64(processed)
-        shared.state.end(jobid, api=False)
+        try:
+            processed = processor(image, local_config=req.params)
+            image = encode_pil_to_base64(processed)
+        finally:
+            shared.state.end(jobid, api=False)
         return ResPreprocess(model=processor.processor_id, image=image)
 
     def get_mask(self):
@@ -111,9 +113,11 @@ class APIProcess:
             else:
                 setattr(masking.opts, k, v)
         jobid = shared.state.begin('API-MASK', api=True)
-        with self.queue_lock:
-            processed = masking.run_mask(input_image=image, input_mask=mask, return_type=req.type)
-        shared.state.end(jobid, api=False)
+        try:
+            with self.queue_lock:
+                processed = masking.run_mask(input_image=image, input_mask=mask, return_type=req.type)
+        finally:
+            shared.state.end(jobid, api=False)
         if processed is None:
             return JSONResponse(status_code=400, content={"error": "Mask is none"})
         image = encode_pil_to_base64(processed)
@@ -128,15 +132,17 @@ class APIProcess:
         classes = []
         boxes = []
         labels = []
-        with self.queue_lock:
-            items = shared.detailer.predict(req.model, req.model, image)
-            for item in items:
-                images.append(encode_pil_to_base64(item.item))
-                scores.append(item.score)
-                classes.append(item.cls)
-                labels.append(item.label)
-                boxes.append(item.box)
-        shared.state.end(jobid, api=False)
+        try:
+            with self.queue_lock:
+                items = shared.detailer.predict(req.model, req.model, image)
+                for item in items:
+                    images.append(encode_pil_to_base64(item.item))
+                    scores.append(item.score)
+                    classes.append(item.cls)
+                    labels.append(item.label)
+                    boxes.append(item.box)
+        finally:
+            shared.state.end(jobid, api=False)
         return ResFace(classes=classes, labels=labels, scores=scores, boxes=boxes, images=images)
 
     def post_detail(self, req: models.ReqDetail):
