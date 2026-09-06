@@ -132,7 +132,11 @@ def apply_file_wildcards(prompt, replaced = None, not_found = None, recursion=0,
             else:
                 paths = [os.path.splitext(p.lower())[0] for p in os.path.normpath(file).split(os.path.sep)] # every path component
             paths.insert(0, os.path.splitext(file)[0].lower())
-            if (trimmed in paths) or (os.path.sep in trimmed and trimmed in paths[0]):
+            if file_only:
+                path_match = paths[0].endswith(os.path.sep + trimmed)
+            else:
+                path_match = os.path.sep + trimmed.rstrip(os.path.sep) + os.path.sep in os.path.sep + paths[0]
+            if (trimmed in paths) or (os.path.sep in trimmed and path_match):
                 try:
                     with open(file, encoding='utf-8') as f:
                         lines = f.readlines()
