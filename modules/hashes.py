@@ -75,11 +75,11 @@ def calculate_sha256(filename, quiet=False):
 
 def sha256_from_cache(filename: str, title: str, *, store: KnownHashStores | str | None = None):
     hashes = cache(store)
-    if title not in hashes:
+    if title not in hashes or not os.path.isfile(filename):
         return None
     cached = hashes[title]
-    ondisk_mtime = os.path.getmtime(filename) if os.path.isfile(filename) else 0
-    if ondisk_mtime > cached["mtime"] or not cached["sha256"]:
+    ondisk_mtime = os.path.getmtime(filename)
+    if ondisk_mtime != cached["mtime"] or not cached["sha256"]:
         return None
     return cached["sha256"]
 
