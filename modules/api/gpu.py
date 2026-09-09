@@ -7,12 +7,7 @@ device = None
 
 def get_gpu():
     import installer
-    res = {}
-    if len(installer.gpu_info) == 1:
-        return installer.gpu_info[0]
-    for i, item in enumerate(installer.gpu_info):
-        res[i] = item
-    return res
+    return installer.gpu_info
 
 
 def get_gpu_smi():
@@ -21,7 +16,7 @@ def get_gpu_smi():
     if device is None:
         try:
             device = torch.cuda.get_device_name(torch.cuda.current_device())
-            log.info(f'GPU monitoring: device={device}')
+            log.info(f'GPU monitoring: device="{device}"')
         except Exception:
             device = ''
     # per vendor modules
@@ -38,7 +33,7 @@ def get_gpu_smi():
 
 
 """
-Resut should always be: list[ResGPU]
+Result should always be: list[ResGPU]
 class ResGPU(BaseModel):
     name: str = Field(title="GPU Name")
     data: dict = Field(title="Name/Value data")

@@ -17,6 +17,19 @@ exclude_errors = [
     "'ChronoEditTransformer3DModel'",
 ]
 
+# shared.sd_model_type -> dotted module path of a pipeline native loader
+# exposing ``try_load(name, network_on_disk, lora_scale)``. New archs add an
+# entry here and ship a per-arch ``try_load`` (either binding native_adapter's
+# generic helpers via try_load_chain, or rolling their own).
+NATIVE_DISPATCH = {
+    'zimage':     'pipelines.z_image.zimage_lora',
+    'chroma':     'pipelines.chroma.chroma_lora',
+    'ernieimage': 'pipelines.ernie.ernie_lora',
+    'f2':         'pipelines.flux.flux2_lora',
+    'anima':      'pipelines.anima.anima_lora',
+    'krea2':      'pipelines.krea2.krea2_lora',
+}
+
 
 def lora_dump(lora, dct):
     import tempfile
@@ -45,68 +58,16 @@ def load_safetensors(name, network_on_disk: network.NetworkOnDisk) -> network.Ne
 
     sd_model = getattr(shared.sd_model, "pipe", shared.sd_model)
     cached = lora_cache.get(name, None)
-    if l.debug:
-        log.debug(f'Network load: type=LoRA name="{name}" file="{network_on_disk.filename}" type=lora {"cached" if cached else ""}')
     if cached is not None:
         return cached
-    if shared.sd_model_type == 'zimage':
-        from pipelines.z_image import zimage_lora
-        lora_scale = shared.opts.extra_networks_default_multiplier
-        zimage_net = None
-        for try_fn in (zimage_lora.try_load_lora, zimage_lora.try_load_lokr, zimage_lora.try_load_loha, zimage_lora.try_load_oft):
-            sub = try_fn(name, network_on_disk, lora_scale)
-            if sub is None:
-                continue
-            if zimage_net is None:
-                zimage_net = sub
-            else:
-                zimage_net.modules.update(sub.modules)
-        if zimage_net is not None:
-            lora_cache[name] = zimage_net
-        return zimage_net
-    if shared.sd_model_type == 'anima':
-        from pipelines.anima import anima_lora
-        lora_scale = shared.opts.extra_networks_default_multiplier
-        anima_net = anima_lora.try_load_lora(name, network_on_disk, lora_scale)
-        if anima_net is not None:
-            lora_cache[name] = anima_net
-        return anima_net
-    if shared.sd_model_type == 'ernieimage':
-        from pipelines.ernie import ernie_lora
-        lora_scale = shared.opts.extra_networks_default_multiplier
-        ernie_net = None
-        for try_fn in (ernie_lora.try_load_lora, ernie_lora.try_load_lokr, ernie_lora.try_load_loha, ernie_lora.try_load_oft):
-            sub = try_fn(name, network_on_disk, lora_scale)
-            if sub is None:
-                continue
-            if ernie_net is None:
-                ernie_net = sub
-            else:
-                ernie_net.modules.update(sub.modules)
-        if ernie_net is not None:
-            lora_cache[name] = ernie_net
-        return ernie_net
-    if shared.sd_model_type == 'chroma':
-        from pipelines.chroma import chroma_lora
-        lora_scale = shared.opts.extra_networks_default_multiplier
-        chroma_net = None
-        for try_fn in (chroma_lora.try_load_lora, chroma_lora.try_load_lokr, chroma_lora.try_load_loha, chroma_lora.try_load_oft):
-            sub = try_fn(name, network_on_disk, lora_scale)
-            if sub is None:
-                continue
-            if chroma_net is None:
-                chroma_net = sub
-            else:
-                chroma_net.modules.update(sub.modules)
-        if chroma_net is not None:
-            lora_cache[name] = chroma_net
-        return chroma_net
-    if shared.sd_model_type == 'f2':
-        from pipelines.flux import flux2_lora
-        f2_net = flux2_lora.try_load(name, network_on_disk, shared.opts.extra_networks_default_multiplier)
-        if f2_net is not None:
-            lora_cache[name] = f2_net
-        return f2_net
+    native_module = NATIVE_DISPATCH.get(shared.sd_model_type)
+    if native_module is not None:
+        import importlib
+        mod = importlib.import_module(native_module)
+        net = mod.try_load(name, network_on_disk, shared.opts.extra_networks_default_multiplier)
+        if net is not None:
+            lora_cache[name] = net
+        return net
     net = network.Network(name, network_on_disk)
     net.mtime = os.path.getmtime(network_on_disk.filename)
     state_dict = sd_models.read_state_dict(network_on_disk.filename, what='network')
@@ -136,9 +97,11 @@ def load_safetensors(name, network_on_disk: network.NetworkOnDisk) -> network.Ne
             continue
         if parts[0] in ["clip_l","clip_g","t5","unet","transformer"]:
             network_part = []
-            while parts[-1] in ["alpha","weight","lora_up","lora_down"]:
+            while parts and parts[-1] in ["alpha","weight","lora_up","lora_down"]:
                 network_part.insert(0,parts[-1])
                 parts = parts[0:-1]
+            if not parts:
+                continue
             network_part = ".".join(network_part)
             key_network_without_network_parts = "_".join(parts)
             if key_network_without_network_parts.startswith("unet") or key_network_without_network_parts.startswith("transformer"):
@@ -252,6 +215,13 @@ def list_available_networks():
             available_network_aliases[entry.name] = entry
             if entry.fullname != entry.name:
                 available_network_aliases[entry.fullname] = entry
+            # entry.name mangles dots to underscores for legacy reasons and entry.fullname
+            # carries any subfolder prefix, so neither matches when the user types the file's
+            # natural basename. setdefault avoids clobbering an explicit primary entry when
+            # two files in different subfolders share a basename.
+            basename_alias = os.path.splitext(os.path.basename(filename))[0]
+            if basename_alias and basename_alias not in (entry.name, entry.fullname):
+                available_network_aliases.setdefault(basename_alias, entry)
             if entry.shorthash:
                 available_network_hash_lookup[entry.shorthash] = entry
         except OSError as e: # should catch FileNotFoundError and PermissionError etc.
@@ -291,7 +261,7 @@ def gather_networks(names):
     return networks_on_disk
 
 
-def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=None, lora_modules=None):
+def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=None, lora_modules=None, activate=True):
     networks_on_disk = gather_networks(names)
     failed_to_load_networks = []
     recompile_model, skip_lora_load = maybe_recompile_model(names, te_multipliers)
@@ -307,7 +277,7 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
         if network_on_disk is not None:
             shorthash = getattr(network_on_disk, 'shorthash', '').lower()
             if l.debug:
-                log.debug(f'Network load: type=LoRA name="{name}" file="{network_on_disk.filename}" hash="{shorthash}"')
+                log.debug(f'Network load: type=LoRA name="{name}" file="{network_on_disk.filename}" hash="{shorthash}" cached={name in lora_cache}')
             try:
                 lora_scale = te_multipliers[i] if te_multipliers else shared.opts.extra_networks_default_multiplier
                 lora_module = lora_modules[i] if lora_modules and len(lora_modules) > i else None
@@ -335,9 +305,11 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
             continue
         if hasattr(sd_model, 'embedding_db'):
             sd_model.embedding_db.load_diffusers_embedding(None, net.bundle_embeddings)
-        net.te_multiplier = te_multipliers[i] if te_multipliers else shared.opts.extra_networks_default_multiplier
-        net.unet_multiplier = unet_multipliers[i] if unet_multipliers else shared.opts.extra_networks_default_multiplier
-        net.dyn_dim = dyn_dims[i] if dyn_dims else shared.opts.extra_networks_default_multiplier
+        net.pending_config = { # staged, not assigned: cached nets are shared objects and network_deactivate must still see the multipliers that were applied
+            'te': te_multipliers[i] if te_multipliers else shared.opts.extra_networks_default_multiplier,
+            'unet': unet_multipliers[i] if unet_multipliers else shared.opts.extra_networks_default_multiplier,
+            'dyn': dyn_dims[i] if dyn_dims else None, # a multiplier is not a rank; float dyn_dim crashes every consumer that slices with it
+        }
         l.loaded_networks.append(net)
 
     while len(lora_cache) > shared.opts.lora_in_memory_limit:
@@ -352,6 +324,7 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
                 log.trace(f'Network load: type=LoRA list={sd_model.get_list_adapters()}')
                 log.trace(f'Network load: type=LoRA active={sd_model.get_active_adapters()}')
             sd_model.set_adapters(adapter_names=lora_diffusers.diffuser_loaded, adapter_weights=lora_diffusers.diffuser_scales)
+            sd_model.enable_lora() # set_adapters does not clear the disabled flag left by a prior removal
         except Exception as e:
             if str(e) not in exclude_errors:
                 log.error(f'Network load: type=LoRA action=strength {str(e)}')
@@ -370,9 +343,10 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
 
     # Activate native modules loaded via diffusers path (e.g., LoKR on Flux2)
     # Also restore backed-up weights when previously active native modules are removed
+    # Callers that run their own deactivate/activate sequence pass activate=False
     from modules.lora import networks
     native_nets = [net for net in l.loaded_networks if len(net.modules) > 0]
-    if native_nets or networks.native_active:
+    if activate and (native_nets or networks.native_active):
         networks.network_activate()
 
     if len(l.loaded_networks) > 0 and l.debug:

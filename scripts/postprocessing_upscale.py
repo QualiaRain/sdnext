@@ -52,6 +52,8 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
             }
 
     def upscale(self, image, info, upscaler, upscale_mode, upscale_by,  upscale_to_width, upscale_to_height, upscale_crop):
+        if image is None:
+            return None
         if upscale_mode == 1:
             upscale_by = max(upscale_to_width / image.width, upscale_to_height / image.height)
             info["Postprocess upscale to"] = f"{upscale_to_width}x{upscale_to_height}"
@@ -66,12 +68,14 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
         return image
 
     def process(self, pp: scripts_postprocessing.PostprocessedImage, upscale_mode=1, upscale_by=2.0, upscale_to_width=None, upscale_to_height=None, upscale_crop=False, upscaler_1_name=None, upscaler_2_name=None, upscaler_2_visibility=0.0): # pylint: disable=arguments-differ
-
         if upscaler_1_name == "None":
             upscaler_1_name = None
         upscaler1 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_1_name]), None)
         if not upscaler1:
-            if upscaler_1_name is not None:
+            from modules.modelloader import load_upscalers # refresh loadable upscalers if not found
+            load_upscalers()
+            upscaler1 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_1_name]), None)
+            if not upscaler1 and upscaler_1_name is not None:
                 log.warning(f"Could not find upscaler: {upscaler_1_name or '<empty string>'}")
             return
         upscaled_image = self.upscale(pp.image, pp.info, upscaler1, upscale_mode, upscale_by, upscale_to_width, upscale_to_height, upscale_crop)
@@ -112,5 +116,6 @@ class ScriptPostprocessingUpscaleSimple(ScriptPostprocessingUpscale):
         upscaler1 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_name]), None)
         if upscaler1 is None:
             log.debug(f"Upscaler not found: {upscaler_name}")
+            return
         pp.image = self.upscale(pp.image, pp.info, upscaler1, 0, upscale_by, 0, 0, False)
         pp.info["Postprocess upscaler"] = upscaler1.name

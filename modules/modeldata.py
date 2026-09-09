@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 from modules import errors, shared
@@ -54,6 +55,10 @@ def get_model_type(pipe):
         model_type = 'f1'
     elif "ZImage" in name or "Z-Image" in name:
         model_type = 'zimage'
+    elif "Ideogram4" in name:
+        model_type = 'ideogram4'
+    elif "Krea2" in name:
+        model_type = 'krea2'
     elif "LuminaDiMOO" in name:
         model_type = 'luminadimoo'
     elif "Lumina2" in name:
@@ -94,6 +99,8 @@ def get_model_type(pipe):
         model_type = 'kolors'
     elif 'Meissonic' in name:
         model_type = 'meissonic'
+    elif 'LensPipeline' in name:
+        model_type = 'lens'
     elif 'Qwen' in name:
         model_type = 'qwen'
     elif 'ErnieImage' in name or 'ERNIE-Image' in name:
@@ -104,6 +111,8 @@ def get_model_type(pipe):
         model_type = 'nextstep'
     elif 'XOmni' in name or 'X-Omni' in name:
         model_type = 'x-omni'
+    elif 'PRXPixel' in name or 'PRXPixelPipeline' in name:
+        model_type = 'prxpixel'
     elif 'Photoroom' in name:
         model_type = 'prx'
     elif 'LongCat' in name:
@@ -118,6 +127,8 @@ def get_model_type(pipe):
         model_type = 'ovis'
     elif 'Wan' in name:
         model_type = 'wanai'
+    elif 'BooguImage' in name or 'Boogu' in name:
+        model_type = 'boogu'
     elif 'ChronoEdit' in name:
         model_type = 'chrono'
     elif 'HunyuanImage3' in name:
@@ -126,6 +137,10 @@ def get_model_type(pipe):
         model_type = 'hunyuanimage'
     elif 'sdxs-1b' in name:
         model_type = 'sdxs'
+    elif 'SeFi' in name:
+        model_type = 'sefi'
+    elif 'Mage-Flow' in name:
+        model_type = 'mageflow'
     # video models
     elif "Kandinsky5" in name and '2V' in name:
         model_type = 'kandinsky5video'
@@ -141,6 +156,8 @@ def get_model_type(pipe):
         model_type = 'mochivideo'
     elif "Allegro" in name:
         model_type = 'allegrovideo'
+    elif 'MiniMaxH3' in name:
+        model_type = 'minimaxh3'
     # cloud models
     elif 'GoogleVeo' in name:
         model_type = 'veo3'
@@ -155,6 +172,8 @@ class ModelData:
     def __init__(self):
         self.sd_model: DiffusionPipeline | None = None
         self.sd_refiner: DiffusionPipeline | None = None
+        self.sd_model_name = ''
+        self.sd_refiner_name = ''
         self.sd_dict = 'None'
         self.initial = True
         self.locked = True
@@ -171,6 +190,7 @@ class ModelData:
                 try:
                     from modules.sd_models import reload_model_weights
                     self.sd_model = reload_model_weights(op='model') # note: reload_model_weights directly updates model_data.sd_model and returns it at the end
+                    self.sd_model_name = shared.opts.sd_model_checkpoint
                     self.initial = False
                 except Exception as e:
                     log.error("Failed to load stable diffusion model")
@@ -188,6 +208,7 @@ class ModelData:
                 try:
                     from modules.sd_models import reload_model_weights
                     self.sd_refiner = reload_model_weights(op='refiner')
+                    self.sd_refiner_name = shared.opts.sd_model_refiner
                     self.initial = False
                 except Exception as e:
                     log.error("Failed to load stable diffusion model")
@@ -204,7 +225,7 @@ model_data = ModelData()
 
 
 # provides shared.sd_model field as a property
-class Shared(sys.modules[__name__].__class__):
+class Shared(ModuleType):
     @property
     def sd_loaded(self):
         return model_data.sd_model is not None
@@ -245,6 +266,10 @@ class Shared(sys.modules[__name__].__class__):
         return model_type
 
     @property
+    def sd_model_name(self):
+        return model_data.sd_model_name
+
+    @property
     def sd_refiner_type(self):
         try:
             if model_data.sd_refiner is None:
@@ -254,6 +279,10 @@ class Shared(sys.modules[__name__].__class__):
         except Exception:
             model_type = 'unknown'
         return model_type
+
+    @property
+    def sd_refiner_name(self):
+        return model_data.sd_refiner_name
 
     @property
     def console(self):

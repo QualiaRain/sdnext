@@ -4,27 +4,6 @@ from modules import shared, devices, scripts_manager, processing, sd_models
 from modules.logger import log
 
 
-checked_ok = False
-
-
-def check_dependencies():
-    global checked_ok # pylint: disable=global-statement
-    from installer import installed, install
-    packages = [
-        ('ligo-segments', 'ligo-segments'),
-    ]
-    for pkg in packages:
-        if not installed(pkg[1], quiet=True):
-            install(pkg[0], pkg[1], ignore=False)
-    try:
-        from ligo.segments import segment # pylint: disable=unused-import
-        checked_ok = True
-        return True
-    except Exception as e:
-        log.error(f'Mixture tiling: {e}')
-        return False
-
-
 class MixtureTilingScript(scripts_manager.Script):
     def title(self):
         return 'Mixture Tiling: Scene Composition'
@@ -45,10 +24,19 @@ class MixtureTilingScript(scripts_manager.Script):
             y_overlap = gr.Slider(label='Y overlap', minimum=0, maximum=1, step=0.01, value=0.5)
         return x_size, y_size, x_overlap, y_overlap
 
+    def check_dependencies(self):
+        from installer import install
+        install('igwn-segments')
+        try:
+            from igwn_segments import segment # pylint: disable=unused-import
+            return True
+        except Exception as e:
+            log.error(f'Mixture tiling: {e}')
+            return False
+
     def run(self, p: processing.StableDiffusionProcessing, x_size, y_size, x_overlap, y_overlap): # pylint: disable=arguments-differ
-        if not checked_ok:
-            if not check_dependencies():
-                return None
+        if not self.check_dependencies():
+            return None
         prompts = p.prompt.splitlines()
         if len(prompts) != x_size * y_size:
             log.error(f'Mixture tiling prompt count mismatch: prompts={len(prompts)} required={x_size * y_size}')
@@ -79,10 +67,10 @@ class MixtureTilingScript(scripts_manager.Script):
             y_prompts.append(x_prompts)
         p.task_args['prompt'] = y_prompts
         p.task_args['seed'] = p.seed
-        p.task_args['tile_width'] = p.height
-        p.task_args['tile_height'] = p.width
-        p.task_args['tile_col_overlap'] = int(p.height * x_overlap)
-        p.task_args['tile_row_overlap'] = int(p.width * y_overlap)
+        p.task_args['tile_width'] = p.width
+        p.task_args['tile_height'] = p.height
+        p.task_args['tile_col_overlap'] = int(p.width * x_overlap)
+        p.task_args['tile_row_overlap'] = int(p.height * y_overlap)
         p.task_args['output_type'] = 'np'
         # run pipeline
         log.debug(f'Tiling: args={p.task_args}')

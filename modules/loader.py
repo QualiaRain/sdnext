@@ -56,6 +56,9 @@ except Exception as e:
     report(f'scipy=={scipy.__version__ if scipy is not None else None}', e)
 timer.startup.record("scipy")
 
+inductor_cache = os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".cache", "inductor"))
+triton_cache = os.environ.setdefault("TRITON_CACHE_DIR", os.path.join(os.path.expanduser("~"), ".cache", "triton"))
+
 try:
     import atexit
     import torch._inductor.async_compile as ac
@@ -75,6 +78,9 @@ except Exception:
     pass
 
 try:
+    # del torch._C._c10d_init
+    import torch.distributed # pylint: disable=ungrouped-imports
+    torch.distributed.is_available = lambda: False
     import torch.distributed.distributed_c10d as _c10d # pylint: disable=unused-import,ungrouped-imports
 except Exception:
     log.warning('Loader: torch is not built with distributed support')
@@ -95,8 +101,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings(action="ignore", category=UserWarning, module="torchvision")
 torchvision = None
 try:
+    sys.modules['torchvision.samples'] = types.ModuleType("torchvision.samples") # monkey-patch to avoid torchvision sample download
     import torchvision # pylint: disable=W0611,C0411
-    import pytorch_lightning # pytorch_lightning should be imported after torch, but it re-enables warnings on import so import once to disable them # pylint: disable=W0611,C0411
+    # import pytorch_lightning # pytorch_lightning should be imported after torch, but it re-enables warnings on import so import once to disable them # pylint: disable=W0611,C0411
 except Exception as e:
     report(f'torchvision=={torchvision.__version__ if torchvision is not None else None}', e)
 
@@ -125,6 +132,13 @@ if ".dev" in torch.__version__ or "+git" in torch.__version__:
     torch.__long_version__ = torch.__version__
     torch.__version__ = re.search(r'[\d.]+[\d]', torch.__version__).group(0)
 timer.startup.record("torch")
+
+try:
+    from modules.sd_hijack_triton import install as install_autotune_report # pylint: disable=ungrouped-imports
+    install_autotune_report()
+except Exception as e:
+    log.warning(f'Triton logging: {e}')
+timer.startup.record("triton")
 
 try:
     import bitsandbytes # pylint: disable=unused-import
@@ -157,6 +171,7 @@ except Exception as e:
     report(f'pydantic=={pydantic.__version__ if "pydantic" in sys.modules else None}', e)
 timer.startup.record("pydantic")
 
+import tokenizers # pylint: disable=W0611,C0411
 try:
     # transformers==5.x has different dependency stack so switching between v4 and v5 becomes very painful
     # this temporarily disables dependency version checks so we can use either v4 or v5 until we drop support for v4
@@ -175,12 +190,15 @@ except Exception as e:
 timer.startup.record("transformers")
 
 try:
-    import onnxruntime # pylint: disable=W0611,C0411
-    onnxruntime.set_default_logger_severity(4)
-    onnxruntime.set_default_logger_verbosity(1)
-    onnxruntime.disable_telemetry_events()
+    import onnxruntime as ort# pylint: disable=W0611,C0411
+    ort.set_default_logger_severity(4)
+    ort.set_default_logger_verbosity(1)
+    ort.disable_telemetry_events()
+    _onnx = True
 except Exception as e:
-    log.warning(f'Torch onnxruntime: {e}')
+    log.warning(f'Init onnxruntime: {e}')
+    ort = None
+    _onnx = False
 timer.startup.record("onnx")
 
 timer.startup.record("fastapi")
@@ -196,19 +214,28 @@ from tqdm.rich import tqdm # pylint: disable=W0611,C0411
 try:
     logging.getLogger("diffusers.guiders").setLevel(logging.ERROR)
     logging.getLogger("diffusers.loaders.single_file").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub._login").setLevel(logging.ERROR)
     import diffusers.utils.import_utils # pylint: disable=W0611,C0411
     diffusers.utils.import_utils._k_diffusion_available = True # pylint: disable=protected-access # monkey-patch since we use k-diffusion from git
     diffusers.utils.import_utils._k_diffusion_version = '0.0.12' # pylint: disable=protected-access
     diffusers.utils.import_utils._bitsandbytes_available = _bnb # pylint: disable=protected-access
-
+    diffusers.utils.import_utils._onnx_available = _onnx # pylint: disable=protected-access
     import diffusers # pylint: disable=W0611,C0411
     import diffusers.loaders.single_file # pylint: disable=W0611,C0411
     diffusers.loaders.single_file.logging.tqdm = partial(tqdm, unit='C')
-    timer.startup.record("diffusers")
 except Exception as e:
     log.error(f'Loader: diffusers=={diffusers.__version__ if "diffusers" in sys.modules else None} {e}')
     log.error('Please restart re-run the installer')
+    errors.display(e, 'diffusers')
     sys.exit(1)
+timer.startup.record("diffusers")
+
+from installer import register_sdnq
+register_sdnq()
+import sdnq # pylint: disable=W0611,C0411
+diffusers.utils.import_utils._sdnq_available = True # pylint: disable=protected-access
+diffusers.utils.import_utils._sdnq_version = sdnq.__version__ # pylint: disable=protected-access
+timer.startup.record("sdnq")
 
 try:
     import pillow_jxl # pylint: disable=W0611,C0411
@@ -217,20 +244,19 @@ except Exception:
 from PIL import Image # pylint: disable=W0611,C0411
 timer.startup.record("pillow")
 
-
 import cv2 # pylint: disable=W0611,C0411
 timer.startup.record("cv2")
 
 class _tqdm_cls:
     def __call__(self, *args, **kwargs):
-        bar_format = 'Progress {rate_fmt}{postfix} {bar} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + '{desc}' + '\x1b[0m'
-        return tqdm_lib.tqdm(*args, bar_format=bar_format, ncols=80, colour='#327fba', **kwargs)
+        bar_format = 'Progress {rate_fmt}{postfix} {bar:15} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + '{desc}' + '\x1b[0m'
+        return tqdm_lib.tqdm(*args, bar_format=bar_format, ncols=120, colour='#327fba', **kwargs)
 
 class _tqdm_old(tqdm_lib.tqdm):
     def __init__(self, *args, **kwargs):
         kwargs.pop("name", None)
-        kwargs['bar_format'] = 'Progress {rate_fmt}{postfix} {bar} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + '{desc}' + '\x1b[0m'
-        kwargs['ncols'] = 80
+        kwargs['bar_format'] = 'Progress {rate_fmt}{postfix} {bar:15} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + '{desc}' + '\x1b[0m'
+        kwargs['ncols'] = 120
         super().__init__(*args, **kwargs)
 
 try:
@@ -243,11 +269,17 @@ except Exception:
 def get_packages():
     return {
         "torch": getattr(torch, "__long_version__", torch.__version__),
+        "torchvision": torchvision.__version__,
         "diffusers": diffusers.__version__,
-        "gradio": gradio.__version__,
         "transformers": transformers.__version__,
+        "sdnq": sdnq.__version__,
+        "tokenizers": tokenizers.__version__,
         "accelerate": accelerate.__version__,
         "hub": huggingface_hub.__version__,
+        "gradio": gradio.__version__,
+        "pydantic": pydantic.__version__,
+        "numpy": np.__version__,
+        "onnxruntime": ort.__version__ if ort is not None else None,
     }
 
 try:
@@ -280,5 +312,5 @@ class VersionString(str): # support both string and tuple for version check
 
 
 torch.__version__ = VersionString(torch.__version__)
-log.info(f'Torch: torch=={torch.__version__} torchvision=={torchvision.__version__}')
-log.info(f'Packages: diffusers=={diffusers.__version__} transformers=={transformers.__version__} accelerate=={accelerate.__version__} gradio=={gradio.__version__} pydantic=={pydantic.__version__} numpy=={np.__version__} cv2=={cv2.__version__}')
+packages_lst = [f'{pkg}=={ver}' for pkg, ver in get_packages().items()]
+log.info(f'Packages: {" ".join(packages_lst)}')

@@ -1,7 +1,7 @@
 from fastapi.exceptions import HTTPException
 import gradio as gr
 from modules.api import models
-from modules.errors import log
+from modules.logger import log
 from modules import scripts_manager
 
 
@@ -73,6 +73,8 @@ def init_default_script_args(script_runner):
             if script.ui(script.is_img2img):
                 ui_default_values = []
                 for elem in script.ui(script.is_img2img):
+                    if elem is None:
+                        continue
                     ui_default_values.append(elem.value)
                 script_args[script.args_from:script.args_to] = ui_default_values
     return script_args

@@ -940,7 +940,7 @@ class StableDiffusionXLDiffImg2ImgPipeline(DiffusionPipeline, FromSingleFileMixi
             num_inference_steps = len(list(filter(lambda ts: ts >= discrete_timestep_cutoff, timesteps)))
             timesteps = timesteps[:num_inference_steps]
 
-        # prepartions for diff diff
+        # preparations for diff diff
         original_with_noise = self.prepare_latents(
             original_image, timesteps, batch_size, num_images_per_prompt, prompt_embeds.dtype, device, generator
         )
@@ -1546,7 +1546,8 @@ class StableDiffusionDiffImg2ImgPipeline(DiffusionPipeline):
                 # representations. The `last_hidden_states` that we typically use for
                 # obtaining the final prompt representations passes through the LayerNorm
                 # layer.
-                prompt_embeds = self.text_encoder.text_model.final_layer_norm(prompt_embeds)
+                # transformers >=5.6 flattened CLIPTextModel; CLIPTextModelWithProjection still nests it under .text_model
+                prompt_embeds = getattr(self.text_encoder, 'text_model', self.text_encoder).final_layer_norm(prompt_embeds)
 
         if self.text_encoder is not None:
             prompt_embeds_dtype = self.text_encoder.dtype
@@ -1764,7 +1765,7 @@ class StableDiffusionDiffImg2ImgPipeline(DiffusionPipeline):
         # 8. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
 
-        # prepartions
+        # preparations
         original_with_noise = self.prepare_latents(
             image, timesteps, batch_size, num_images_per_prompt, prompt_embeds.dtype, device, generator
         )

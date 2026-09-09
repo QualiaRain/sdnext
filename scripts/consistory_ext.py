@@ -75,7 +75,7 @@ class ConsiStoryScript(scripts_manager.Script):
             shared.sd_model = sd_models.switch_pipe(cs.ConsistoryExtendAttnSDXLPipeline, shared.sd_model)
             shared.sd_model.unet = cs.ConsistorySDXLUNet2DConditionModel.from_config(shared.sd_model.unet.config)
             shared.sd_model.unet.load_state_dict(state_dict) # now load it into new class
-            shared.sd_model.unet.to(dtype=devices.dtype) # ty: ignore
+            shared.sd_model.unet.to(dtype=devices.dtype)
             state_dict = None
             # sd_models.set_diffuser_options(shared.sd_model)
             sd_models.move_model(shared.sd_model, devices.device)
@@ -95,10 +95,10 @@ class ConsiStoryScript(scripts_manager.Script):
             try:
                 freeu_preset = [float(f.strip()) for f in freeu_preset.split(',')]
             except Exception:
-                freeu_preset = []
                 log.warning(f'ConsiStory: freeu="{freeu_preset}" invalid')
-            if len(freeu) == 4:
-                shared.sd_model.enable_freeu(s1=freeu[0], s2=freeu[0], b1=freeu[0], b2=freeu[0])
+                freeu_preset = []
+            if len(freeu_preset) == 4:
+                shared.sd_model.enable_freeu(s1=freeu_preset[0], s2=freeu_preset[1], b1=freeu_preset[2], b2=freeu_preset[3])
         steps = 50 if steps else p.steps
         if injection:
             try:

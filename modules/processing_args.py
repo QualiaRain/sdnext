@@ -6,7 +6,7 @@ import inspect
 import torch
 import numpy as np
 from PIL import Image
-from modules import shared, sd_models, processing, processing_vae, processing_helpers, sd_hijack_hypertile, extra_networks, sd_vae
+from modules import shared, sd_models, processing, processing_vae, processing_helpers, sd_hijack_hypertile, sd_vae
 from modules.logger import log
 from modules.processing_callbacks import diffusers_callback_legacy, diffusers_callback, set_callbacks_p
 from modules.processing_helpers import get_generator, apply_circular # pylint: disable=unused-import
@@ -19,8 +19,8 @@ debug_log = log.trace if debug_enabled else lambda *args, **kwargs: None
 disable_pbar = os.environ.get('SD_DISABLE_PBAR', None) is not None
 
 
-def task_modular_kwargs(p, model): # pylint: disable=unused-argument
-    # model_cls = model.__class__.__name__
+def task_modular_kwargs(p, model):
+    model_cls = model.__class__.__name__
     task_args = {}
     p.ops.append('modular')
 
@@ -33,6 +33,15 @@ def task_modular_kwargs(p, model): # pylint: disable=unused-argument
     mask_image = p.task_args.get('image_mask', None) or getattr(p, 'image_mask', None) or getattr(p, 'mask', None)
     if mask_image is not None:
         task_args['mask_image'] = mask_image
+
+    if model_cls in ['MiniMaxH3ModularPipeline'] and task_args.get('image', None) is not None:
+        if len(task_args.get('image', [])) > 2:
+            task_args['normalized_references'] = task_args['image']
+            task_args.pop('image', None) # remove image, only use normalized_references
+        elif len(task_args.get('image', [])) > 1:
+            task_args['last_image'] = task_args['image'][1]
+        if len(task_args.get('image', [])) > 0:
+            task_args['image'] = task_args['image'][0]
 
     if debug_enabled:
         debug_log(f'Process task specific args: {task_args}')
@@ -139,7 +148,9 @@ def task_specific_kwargs(p, model):
         task_args['image'] = p.init_images
 
     if ('QwenImageLayeredPipeline' in model_cls) and (task_args.get('image', None) is not None):
-        task_args['image'] = [i.convert('RGBA') for i in task_args['image']]
+        image_items = task_args['image']
+        if isinstance(image_items, list):
+            task_args['image'] = [i.convert('RGBA') for i in image_items]
     if ('LatentConsistencyModelPipeline' in model_cls) and (len(p.init_images) > 0):
         p.ops.append('lcm')
         init_latents = [processing_vae.vae_encode(image, model=shared.sd_model, vae_type=p.vae_type).squeeze(dim=0) for image in p.init_images]
@@ -159,8 +170,8 @@ def task_specific_kwargs(p, model):
             return task_args
         task_args = {
             'reference_image': p.init_images[0],
-            'source_subject_category': getattr(p, 'negative_prompt', '').split()[-1],
-            'target_subject_category': getattr(p, 'prompt', '').split()[-1],
+            'source_subject_category': (getattr(p, 'negative_prompt', '').split() or [''])[-1],
+            'target_subject_category': (getattr(p, 'prompt', '').split() or [''])[-1],
             'output_type': 'pil',
         }
 
@@ -170,13 +181,49 @@ def task_specific_kwargs(p, model):
 
 
 def get_params(model):
+    possible = []
     if hasattr(model, 'blocks') and hasattr(model.blocks, 'inputs'): # modular pipeline
         possible = [input_param.name for input_param in model.blocks.inputs]
-        return possible
+        possible += ['output'] # __call__ param selecting which state values to return, not a block input
     else:
         signature = inspect.signature(type(model).__call__, follow_wrapped=True)
         possible = list(signature.parameters)
-        return possible
+    possible = [p for p in possible if p not in ['self', 'kwargs', None]]
+    return possible
+
+
+def get_defaults(model, kwargs):
+    remove = ['return_dict', 'output_type', 'num_images_per_prompt', 'callback', 'callback_on_step_end_tensor_inputs']
+    default_cfg = 0
+    try:
+        defaults = {}
+        if hasattr(model, 'blocks') and hasattr(model.blocks, 'inputs'):
+            for input_param in model.blocks.inputs:
+                if input_param.name is None:
+                    continue
+                if input_param.default is None:
+                    continue
+                if input_param.name in kwargs or input_param.name in remove:
+                    continue
+                defaults[input_param.name] = input_param.default
+
+        if not defaults:
+            signature = inspect.signature(type(model).__call__, follow_wrapped=True)
+            defaults = {k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty and v.default is not None} # get all defaults
+
+        defaults = {k: v for k, v in defaults.items() if k not in kwargs} # only log defaults that are not already set by kwargs
+        defaults = {k: v for k, v in defaults.items() if k not in remove} # remove common args that are not useful to log
+        log.debug(f'Pipeline: cls={model.__class__.__name__} defaults={defaults}')
+        default_cfg = defaults.get('guidance_scale', 0)
+    except Exception as e:
+        log.error(f'Pipeline defaults: {e}')
+    try:
+        model_name = model.sd_checkpoint_info.name or model.sd_model_checkpoint
+        is_turbo = getattr(getattr(model, 'config', None), 'is_distilled', False) or 'turbo' in model_name.lower()
+        if is_turbo and default_cfg > 1:
+            log.warning(f'Pipeline: cls={model.__class__.__name__} model="{model_name}" type=turbo default guidance={default_cfg}')
+    except Exception:
+        pass
 
 
 def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:list | None=None, negative_prompts_2:list | None=None, prompt_attention:str | None=None, desc:str | None='', **kwargs):
@@ -190,16 +237,24 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     if hasattr(model, 'pipe') and not hasattr(model, 'no_recurse'): # recurse
         model = model.pipe
         has_vae = has_vae or hasattr(model, 'vae')
+    # Wan 2.2 MoE: apply the high/low-noise expert boundary at generation time so it is tunable without
+    # a reload. Both experts resident (transformer + transformer_2) is the combined stage; single-expert
+    # stages keep their load-time boundary. -1 means use the value the checkpoint shipped with.
+    if getattr(model, 'transformer', None) is not None and getattr(model, 'transformer_2', None) is not None and getattr(getattr(model, 'config', None), 'boundary_ratio', None) is not None and hasattr(model, 'register_to_config'):
+        if not hasattr(model, 'wan_boundary_default'):
+            model.wan_boundary_default = model.config.boundary_ratio
+        boundary_target = shared.opts.model_wan_boundary if shared.opts.model_wan_boundary >= 0 else model.wan_boundary_default
+        if boundary_target is not None and model.config.boundary_ratio != boundary_target:
+            model.register_to_config(boundary_ratio=boundary_target)
     if hasattr(model, "set_progress_bar_config"):
         if disable_pbar:
-            model.set_progress_bar_config(bar_format='Progress {rate_fmt}{postfix} {bar} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + desc, ncols=80, colour='#327fba', disable=disable_pbar)
+            model.set_progress_bar_config(bar_format='Progress {rate_fmt}{postfix} {bar:15} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + desc, ncols=120, colour='#327fba', disable=disable_pbar)
         else:
-            model.set_progress_bar_config(bar_format='Progress {rate_fmt}{postfix} {bar} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + desc, ncols=80, colour='#327fba')
+            model.set_progress_bar_config(bar_format='Progress {rate_fmt}{postfix} {bar:15} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining} ' + '\x1b[38;5;71m' + desc, ncols=120, colour='#327fba')
 
     possible = get_params(model)
 
-    if debug_enabled:
-        debug_log(f'Process pipeline possible: {possible}')
+    log.debug(f'Pipeline: cls={cls} possible={possible}')
     steps = kwargs.get("num_inference_steps", None) or len(getattr(p, 'timesteps', ['1']))
     clip_skip = kwargs.pop("clip_skip", 1)
 
@@ -210,9 +265,6 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
             pass # clip_skip = None
         else:
             args['clip_skip'] = clip_skip - 1
-
-    if shared.opts.lora_apply_te:
-        extra_networks.activate(p, include=['text_encoder', 'text_encoder_2', 'text_encoder_3'])
 
     if 'complex_human_instruction' in possible:
         chi = shared.opts.te_complex_human_instruction
@@ -245,17 +297,20 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     if hasattr(model, 'scheduler') and hasattr(model.scheduler, 'noise_sampler_seed') and hasattr(model.scheduler, 'noise_sampler'):
         model.scheduler.noise_sampler = None # noise needs to be reset instead of using cached values
         model.scheduler.noise_sampler_seed = p.seeds # some schedulers have internal noise generator and do not use pipeline generator
-    if 'seed' in possible and p.seed is not None:
+
+    if ('seed' in possible) and (p.seed is not None) and (p.seed > -1):
         args['seed'] = p.seed
-    if 'noise_sampler_seed' in possible and p.seeds is not None:
+    if ('noise_sampler_seed' in possible) and (p.seeds is not None):
         args['noise_sampler_seed'] = p.seeds
-    if 'guidance_scale' in possible and p.cfg_scale is not None and p.cfg_scale > 0:
+    if ('guidance_scale' in possible) and (p.cfg_scale is not None) and (p.cfg_scale > -1):
         args['guidance_scale'] = p.cfg_scale
-    if 'img_guidance_scale' in possible and hasattr(p, 'image_cfg_scale') and p.image_cfg_scale is not None and p.image_cfg_scale > 0:
-        args['img_guidance_scale'] = p.image_cfg_scale
+    if ('img_guidance_scale' in possible) and hasattr(p, 'cfg_image') and (p.cfg_image is not None) and (p.cfg_image > -1):
+        args['img_guidance_scale'] = p.cfg_image
+
     if getattr(getattr(model, 'config', None), 'is_distilled', False) and args.get('guidance_scale', 0) > 1 and not getattr(p, 'distilled_warned', False):
         log.warning(f'Pipeline: cls={model.__class__.__name__} distilled=True cfg_scale={args["guidance_scale"]} ignored, forced to 1')
         p.distilled_warned = True
+
     if 'generator' in possible:
         generator = get_generator(p)
         args['generator'] = generator
@@ -272,15 +327,14 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     if 'Kandinsky' in model.__class__.__name__ or 'Cosmos2' in model.__class__.__name__ or 'OmniGen2' in model.__class__.__name__:
         kwargs['output_type'] = 'np' # only set latent if model has vae
     if 'StableCascade' in model.__class__.__name__:
-        kwargs.pop("guidance_scale") # remove
         kwargs.pop("num_inference_steps") # remove
         if 'prior_num_inference_steps' in possible:
             args["prior_num_inference_steps"] = p.steps
             args["num_inference_steps"] = p.refiner_steps
-        if 'prior_guidance_scale' in possible:
+        if 'prior_guidance_scale' in possible and (p.cfg_scale is not None) and (p.cfg_scale > -1):
             args["prior_guidance_scale"] = p.cfg_scale
-        if 'decoder_guidance_scale' in possible:
-            args["decoder_guidance_scale"] = p.image_cfg_scale
+        if 'decoder_guidance_scale' in possible and (p.cfg_image is not None) and (p.cfg_image > -1):
+            args["decoder_guidance_scale"] = p.cfg_image
     if 'Flex2' in model.__class__.__name__:
         if len(getattr(p, 'init_images', [])) > 0:
             args['inpaint_image'] = p.init_images[0] if isinstance(p.init_images, list) else p.init_images
@@ -296,6 +350,14 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
             args['negative_prompt'] = args['negative_prompt'][0] if len(args['negative_prompt']) > 0 else ''
         if isinstance(args['generator'], list) and len(args['generator']) > 0:
             args['generator'] = args['generator'][0]
+    if 'MiniMaxH3' in model.__class__.__name__:
+        if isinstance(args.get('prompt', None), list): # packs one request into one sequence, str only
+            args['prompt'] = args['prompt'][0] if len(args['prompt']) > 0 else ''
+        if not str(args.get('prompt', '') or '').strip():
+            args['prompt'] = ' ' # an empty prompt tokenizes to zero tokens, which the conditioner cannot reshape
+        args.pop('negative_prompt', None) # guidance-distilled, no negative prompt
+        if isinstance(args.get('generator', None), list) and len(args['generator']) > 0:
+            args['generator'] = args['generator'][0] # >1-element list breaks the audio noise draw
 
     # set callbacks
     if 'prior_callback_steps' in possible:  # Wuerstchen / Cascade
@@ -334,12 +396,13 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
             if type(kwargs[arg]) == float or type(kwargs[arg]) == int:
                 if kwargs[arg] <= -1: # skip -1 as default value
                     continue
+            if kwargs[arg] is None: # skip None values
+                continue
             args[arg] = kwargs[arg]
 
     # optional preprocess
     if hasattr(model, 'preprocess') and callable(model.preprocess):
         model.preprocess(p, args)
-
 
     # handle task specific args
     if sd_models.get_diffusers_task(model) == sd_models.DiffusersTaskType.MODULAR:
@@ -402,6 +465,8 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
 
     sd_hijack_hypertile.hypertile_set(p, hr=len(getattr(p, 'init_images', [])) > 0)
 
+    get_defaults(model, args)
+
     # debug info
     clean = args.copy()
     clean.pop('cross_attention_kwargs', None)
@@ -423,6 +488,8 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
             clean[k] = v.shape
         elif isinstance(v, list) and len(v) > 0 and (isinstance(v[0], torch.Tensor) or isinstance(v[0], np.ndarray)):
             clean[k] = [x.shape for x in v]
+        elif isinstance(v, list) and len(v) > 0 and hasattr(v[0], 'kind'): # media references carry decoded frames and waveforms
+            clean[k] = [getattr(x, 'kind', type(x).__name__) for x in v]
         elif not debug_enabled and k.endswith('_embeds'):
             del clean[k]
             clean['prompt'] = 'embeds'

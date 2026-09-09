@@ -11,7 +11,6 @@ from modules.prompt_parser_xhinker import get_weighted_text_embeddings_sd15, get
 
 debug_enabled = os.environ.get('SD_PROMPT_DEBUG', None)
 debug = log.trace if debug_enabled else lambda *args, **kwargs: None
-debug('Trace: PROMPT')
 orig_encode_token_ids_to_embeddings = EmbeddingsProvider._encode_token_ids_to_embeddings # pylint: disable=protected-access
 token_dict = None # used by helper get_tokens
 token_type = None # used by helper get_tokens
@@ -131,8 +130,11 @@ class PromptEmbedder:
         # unpack EN data in case of TE LoRA
         en_data = p.network_data
         en_data = [idx.items for item in en_data.values() for idx in item]
+        apply_te = getattr(p, 'lora_apply_te', None)
+        if apply_te is None:
+            apply_te = shared.opts.lora_apply_te
         effective_batch = 1 if self.allsame else self.batchsize
-        key = str([self.prompts, self.negative_prompts, effective_batch, self.clip_skip, self.steps, en_data])
+        key = str([self.prompts, self.negative_prompts, effective_batch, self.clip_skip, self.steps, en_data, apply_te])
         item = cache.get(key)
         if not item:
             if not any(flatten(emb) for emb in [self.prompt_embeds,
@@ -166,6 +168,7 @@ class PromptEmbedder:
                 self.negative_prompt_attention_masks = [self.negative_prompt_attention_masks[0]] * self.batchsize
             debug(f"Prompt cache: get={key}")
             return True
+        return False
 
     def compare_prompts(self):
         same = (self.prompts == [self.prompts[0]] * len(self.prompts) and self.negative_prompts == [self.negative_prompts[0]] * len(self.negative_prompts))
@@ -328,7 +331,9 @@ def compel_hijack(self, token_ids: torch.Tensor, attention_mask: torch.Tensor | 
     else:
         hidden_state = text_encoder_output.hidden_states[-clip_skip]
     if normalized:
-        hidden_state = self.text_encoder.text_model.final_layer_norm(hidden_state)
+        # transformers >=5.6 flattened CLIPTextModel; CLIPTextModelWithProjection still nests it under .text_model
+        text_model = getattr(self.text_encoder, 'text_model', self.text_encoder)
+        hidden_state = text_model.final_layer_norm(hidden_state)
     return hidden_state
 
 
@@ -384,6 +389,8 @@ class DiffusersTextualInversionManager(BaseTextualInversionManager):
                 prompt = prompt.replace(token, replacement)
         if hasattr(self.pipe, 'embedding_db'):
             self.pipe.embedding_db.embeddings_used = list(set(self.pipe.embedding_db.embeddings_used))
+            if len(self.pipe.embedding_db.embeddings_used) > 0:
+                log.debug(f'Networks: type=embedding used={self.pipe.embedding_db.embeddings_used}')
         debug(f'Prompt: convert="{prompt}"')
         return prompt
 

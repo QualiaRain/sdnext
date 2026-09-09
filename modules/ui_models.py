@@ -13,16 +13,6 @@ from modules.shared import opts, log
 extra_ui = []
 
 
-def get_folder_size(folder):
-    total_size = 0
-    for dirpath, _dirnames, filenames in os.walk(folder, followlinks=False):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            if not os.path.islink(fp) and os.path.isfile(fp):
-                total_size += os.path.getsize(fp)
-    return round(total_size / 1024 / 1024 / 1024, 3)
-
-
 def update_model_hashes():
     from modules import sd_unet, sd_checkpoint
     unets = {}
@@ -32,8 +22,10 @@ def update_model_hashes():
     yield from sd_models.update_model_hashes(model_type='checkpoint')
 
 
-def create_models_table(rows: list = []):
+def create_models_table(rows: list | None = None):
     from modules import sd_detect
+    if rows is None:
+        rows = []
     rows = sorted(rows, key=lambda row: str(getattr(row, 'model_name', '')).lower())
     html = """
         <table class="simple-table sortable-table" data-sortable="true" data-default-sort-key="name" data-default-sort-order="asc" data-sort-key="name" data-sort-order="asc">
@@ -58,20 +50,18 @@ def create_models_table(rows: list = []):
     for row in rows:
         try:
             f = row.filename
-            stat_size, stat_mtime = modelstats.stat(f)
+            size, mtime = modelstats.stat(f)
+            size = round(size / 1024 / 1024 / 1024, 3)
             if os.path.isfile(f):
                 typ = os.path.splitext(f)[1][1:]
-                size = round(stat_size / 1024 / 1024 / 1024, 3)
             elif os.path.isdir(f):
                 typ = 'diffusers'
-                size = get_folder_size(f)
             else:
                 typ = 'unknown'
-                size = 0
             guess = 'Stable Diffusion' # set default guess
             guess = sd_detect.guess_by_size(f, guess)
             guess = sd_detect.guess_by_name(f, guess)
-            guess, pipeline = sd_detect.guess_by_diffusers(f, guess)
+            guess, pipeline = sd_detect.guess_by_model_index(f, name=None, current_guess=guess)
             guess = sd_detect.guess_variant(f, guess)
             pipeline = sd_detect.shared_items.get_pipelines().get(guess, None) if pipeline is None else pipeline
             model_name = escape(str(row.model_name))
@@ -79,7 +69,7 @@ def create_models_table(rows: list = []):
             typ_name = escape(str(typ))
             guess_name = escape(str(guess))
             hash_name = escape(str(row.shorthash))
-            mtime_sort = stat_mtime.timestamp() if hasattr(stat_mtime, 'timestamp') else 0
+            mtime_sort = mtime.timestamp() if hasattr(mtime, 'timestamp') else 0
             tbody += f"""
                 <tr>
                     <td data-sort-value="{model_name.lower()}">{model_name}</td>
@@ -87,7 +77,7 @@ def create_models_table(rows: list = []):
                     <td data-sort-value="{guess_name.lower()}">{guess_name}</td>
                     <td data-sort-value="{pipeline_name.lower()}">{pipeline_name}</td>
                     <td data-sort-value="{size}">{size:.3f} GB</td>
-                    <td data-sort-value="{mtime_sort}">{stat_mtime}</td>
+                    <td data-sort-value="{mtime_sort}">{mtime}</td>
                     <td data-sort-value="{hash_name.lower()}">{hash_name}</td>
                     <td style="cursor:pointer;" onclick="deleteFile('{escape(str(row.path))}')">\uf530</td>
                 </tr>
@@ -581,16 +571,16 @@ def create_ui():
                 with gr.Accordion(label='Options', open=False, elem_id="civitai_search_options"):
                     civit_download_btn = gr.Button(value="Download model", variant='primary', elem_id="civitai_download_btn", visible=False)
                     with gr.Row():
-                        civit_type = gr.Dropdown(choices=type_fallback, label='Model type', value='', elem_id='civit_type')
-                        civit_base = gr.Dropdown(choices=base_models, label='Base model', value='')
+                        civit_type = gr.Dropdown(choices=type_fallback, label='CivitAI model type', value='', elem_id='civit_type')
+                        civit_base = gr.Dropdown(choices=base_models, label='CivitAI base model', value='')
                     with gr.Row():
-                        civit_sort = gr.Dropdown(choices=sort_fallback, label='Sort', value='', elem_id='civit_sort')
+                        civit_sort = gr.Dropdown(choices=sort_fallback, label='CivitAI sort', value='', elem_id='civit_sort')
                         civit_period = gr.Dropdown(
                             choices=['', 'AllTime', 'Year', 'Month', 'Week', 'Day'],
-                            label='Time period', value='', elem_id='civit_period',
+                            label='CivitAI time period', value='', elem_id='civit_period',
                         )
                     with gr.Row():
-                        civit_nsfw = gr.Checkbox(label='NSFW allowed', value=True)
+                        civit_nsfw = gr.Checkbox(label='CivitAI NSFW allowed', value=True)
                     with gr.Row():
                         civit_token = gr.Textbox(opts.civitai_token, label='CivitAI token', placeholder='optional access token for private or gated models', elem_id="civitai_token")
                     with gr.Row():

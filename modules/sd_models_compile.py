@@ -86,6 +86,49 @@ def optimize_openvino(sd_model, clear_cache=True):
     return sd_model
 
 
+def compile_pruna(sd_model):
+    import warnings
+    from installer import install
+    install('pruna')
+    # pip install pruna[stable-fast] --extra-index-url https://prunaai.pythonanywhere.com/
+    from pruna import smash, SmashConfig
+    # https://docs.pruna.ai/en/stable/compression.html
+    """
+    cachers = ["fastercache", "deepcache", "fora", "pab"]
+    compilers = ["stable_fast", "x_fast", "torch_compile"]
+    factorizers = ["qkv_diffusers"]
+    pruners = ["kvpress", "padding_pruning", "token_merging", "torch_structured", "torch_unstructured"]
+    kernels = ["flash_attn3", "ring_attn", "sage_attn"]
+    distillers = ["text_to_image_distillation_inplace_perp", "text_to_image_distillation_lora", "text_to_image_distillation_perp", "hyper"]
+    enhancers = ["img2img_denoise", "realesrgan_upscale"]
+    quants = ["c_generate", "c_translate", "c_whisper", "llama_cpp"]
+    quantizers = ["gptq", "half", "hqq", "hqq_diffusers", "diffusers_int8", "awq", "torch_dynamic", "torchao"]
+    """
+
+    config_list = shared.opts.pruna_cachers + shared.opts.pruna_compilers + shared.opts.pruna_factorizers + shared.opts.pruna_pruners
+    if len(config_list) == 0:
+        log.warning(f"Model compile: task=pruna pipeline={sd_model.__class__.__name__} no algorithms selected")
+        return sd_model
+    config = SmashConfig(configuration=config_list, device=devices.device)
+    log.info(f"Model compile: task=pruna pipeline={sd_model.__class__.__name__} config={config}")
+    try:
+        smashed_model = smash(
+            model=sd_model,
+            smash_config=config,
+            experimental=shared.opts.pruna_experimental,
+        )
+        return smashed_model
+    except Exception as e:
+        log.error(f"Model compile: task=pruna pipeline={sd_model.__class__.__name__} error={e}")
+        errors.display(e, 'Compile')
+    finally:
+        # re-silence warnings after pruna compile, as it enables a lot of warnings
+        warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+        warnings.filterwarnings(action="ignore", category=FutureWarning)
+        warnings.filterwarnings(action="ignore", category=UserWarning)
+    return sd_model
+
+
 def compile_onediff(sd_model):
     try:
         from onediff.infer_compiler import oneflow_compile
@@ -285,6 +328,7 @@ def compile_diffusers(sd_model, apply_to_components=True, op="Model"):
     if shared.opts.cuda_compile_backend == 'none':
         log.warning(f'{op} compile enabled but no backend specified')
         return sd_model
+    t0 = time.time()
     log.info(f"{op} compile: pipeline={sd_model.__class__.__name__} backend={shared.opts.cuda_compile_backend} options={shared.opts.cuda_compile_options}")
     if shared.opts.cuda_compile_backend == 'onediff':
         sd_model = compile_onediff(sd_model)
@@ -292,9 +336,13 @@ def compile_diffusers(sd_model, apply_to_components=True, op="Model"):
         sd_model = compile_stablefast(sd_model)
     elif shared.opts.cuda_compile_backend == 'deep-cache':
         sd_model = compile_deepcache(sd_model)
+    elif shared.opts.cuda_compile_backend == 'pruna':
+        sd_model = compile_pruna(sd_model)
     else:
         check_deepcache(False)
         sd_model = compile_torch(sd_model, apply_to_components=apply_to_components, op=op)
+    t1 = time.time()
+    log.debug(f"{op} compile: time={t1-t0:.2f}")
     return sd_model
 
 
@@ -322,3 +370,27 @@ def openvino_post_compile(op="base"): # delete unet after OpenVINO compile
             if not shared.opts.openvino_disable_memory_cleanup and hasattr(shared.sd_refiner, "unet"):
                 shared.sd_refiner.unet.apply(sd_models_utils.convert_to_faketensors)
                 devices.torch_gc(force=True)
+
+
+def update_compile_times():
+    from modules.timer import dynamo
+    dynamo.reset()
+    try:
+        from torch._dynamo.utils import compile_times, reset_frame_count
+        raw_str = compile_times()
+        reset_frame_count()
+    except Exception:
+        return
+    lines = raw_str.strip().split('\n')
+    # parsed = []
+    for line in lines:
+        if not line or 'TorchDynamo compilation metrics' in line or 'Function, Runtimes' in line:
+            continue
+        parts = line.split(',')
+        fn = parts[0].strip()
+        try:
+            times = [float(t.strip()) for t in parts[1:] if t.strip()]
+            if times:
+                dynamo.add(fn, round(sum(times), 2))
+        except ValueError:
+            continue

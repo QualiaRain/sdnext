@@ -7,6 +7,7 @@ import math
 import os
 import re
 from typing import Any
+from rich import print as rprint
 
 import huggingface_hub as hf
 from huggingface_hub.utils import disable_progress_bars
@@ -39,6 +40,25 @@ ALIASES = {
     "openai": "OpenAI",
     "hunyuanvideo-community": "HunyuanVideo Community",
 }
+
+
+quiet = True
+def log(*args) -> None:
+    if not quiet:
+        rprint(*args)
+
+
+def response(repo_id: str, code: str | bool, message: str, data: list | dict | None = None) -> dict[str, Any]:
+    status = (isinstance(code, str) and code == 'ok') or (isinstance(code, bool) and code is True)
+    payload: dict[str, Any] = {
+        "status": status,
+        "repo_id": repo_id,
+        "code": code,
+        "message": message,
+        "data": data if data is not None else {},
+    }
+    log('repo_id', json.dumps(payload, indent=2, sort_keys=False))
+    return payload
 
 
 def normalize_author(repo_id: str, model_info: Any) -> str | None:
@@ -112,20 +132,6 @@ def is_navigation_like_text(text: str | None) -> bool:
     return hits >= 3
 
 
-def build_error(repo_id: str, code: str, message: str, matches: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "ok": False,
-        "error": {
-            "code": code,
-            "message": message,
-        },
-        "repo_id": repo_id,
-    }
-    if matches is not None:
-        payload["matches"] = matches
-    return payload
-
-
 def load_token() -> str | None:
     secrets_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "secrets.json")
     if not os.path.isfile(secrets_path):
@@ -193,30 +199,30 @@ def discover_components(model_index: dict[str, Any] | None, files_map: dict[str,
     components: dict[str, Any] = {
         "mains": [],
         "text_encoders": [],
-        "ae": None,
+        "ae": [],
     }
 
     if isinstance(model_index, dict):
         keys = list(model_index.keys())
-        main_keys = sorted([k for k in keys if re.fullmatch(r"(transformer|unet)(_\d+)?", k or "")])
+        main_keys = sorted([k for k in keys if re.search(r"(transformer|unet)", k or "", flags=re.IGNORECASE)])
         components["mains"] = main_keys
 
         text_keys = sorted([k for k in keys if re.fullmatch(r"text_encoder(_\d+)?", k or "")])
         components["text_encoders"] = text_keys
 
-        if "vae" in keys:
-            components["ae"] = "vae"
+        vae_keys = sorted([k for k in keys if re.fullmatch(r".*vae?", k or "")])
+        components["ae"] = vae_keys
 
     top_dirs = {f.split("/", 1)[0] for f in files_map if "/" in f}
 
     if not components["mains"]:
-        components["mains"] = sorted([d for d in top_dirs if re.fullmatch(r"(transformer|unet)(_\d+)?", d or "")])
+        components["mains"] = sorted([d for d in top_dirs if re.search(r"(transformer|unet)", d or "", flags=re.IGNORECASE)])
 
     if not components["text_encoders"]:
-        components["text_encoders"] = sorted([d for d in top_dirs if re.fullmatch(r"text_encoder(_\d+)?", d or "")])
+        components["text_encoders"] = sorted([d for d in top_dirs if re.fullmatch(r"text_encoder|mllm(_\d+)?", d or "")])
 
-    if components["ae"] is None and "vae" in top_dirs:
-        components["ae"] = "vae"
+    if not components["ae"]:
+        components["ae"] = sorted([d for d in top_dirs if re.fullmatch(r".*vae?", d or "")])
 
     return components
 
@@ -565,28 +571,15 @@ def extract_license(model_info: Any) -> str | None:
     return None
 
 
-def release_date_iso(model_info: Any) -> str | None:
-    created_at = getattr(model_info, "created_at", None)
-    if created_at is None:
+def extract_date(model_info: Any, attr_name: str) -> str | None:
+    date_value = getattr(model_info, attr_name, None)
+    if date_value is None:
         return None
     try:
-        return created_at.date().isoformat()
+        return date_value.date().isoformat()
     except Exception:
         try:
-            return str(created_at)[:10]
-        except Exception:
-            return None
-
-
-def modified_date_iso(model_info: Any) -> str | None:
-    last_modified = getattr(model_info, "last_modified", None)
-    if last_modified is None:
-        return None
-    try:
-        return last_modified.date().isoformat()
-    except Exception:
-        try:
-            return str(last_modified)[:10]
+            return str(date_value)[:10]
         except Exception:
             return None
 
@@ -607,27 +600,14 @@ def handle_not_found(repo_id: str, api: hf.HfApi) -> dict[str, Any]:
             matches.append({"repo_id": model_id, "name": model_id.split("/", 1)[-1]})
 
     if len(matches) > 1:
-        return build_error(
-            repo_id,
-            "multiple_matches",
-            "Multiple matching models found. Please specify a more specific repo id.",
-            matches=matches,
-        )
-
-    return build_error(repo_id, "repo_not_found", "Model repo id not found or inaccessible.")
+        return response(repo_id, code=False, message="Multiple matching models found", data=matches)
+    return response(repo_id, code=False, message="Model repo id not found or inaccessible", data=None)
 
 
-def main() -> int:
+def search(repo_id: str) -> int:
     disable_progress_bars()
-    parser = argparse.ArgumentParser(description="Query Hugging Face model metadata and component stats.")
-    parser.add_argument("repo_id", help="Strict Hugging Face repo id in format owner/name")
-    args = parser.parse_args()
-
-    repo_id = args.repo_id.strip()
     if not re.fullmatch(r"[^/\s]+/[^/\s]+", repo_id):
-        error = build_error(repo_id, "invalid_repo_id", "Expected repo id format: owner/name")
-        print(json.dumps(error, indent=2, sort_keys=False))
-        return 1
+        return response(repo_id, code=False, message="Invalid repo id format", data=None)
 
     token = load_token()
     api = hf.HfApi(token=token)
@@ -635,26 +615,27 @@ def main() -> int:
     try:
         model_info = api.model_info(repo_id=repo_id, files_metadata=True)
     except hf.errors.RepositoryNotFoundError:
-        print(json.dumps(handle_not_found(repo_id, api), indent=2, sort_keys=False))
-        return 1
+        return handle_not_found(repo_id, api)
     except hf.errors.HfHubHTTPError as err:
         status_code = getattr(getattr(err, "response", None), "status_code", None)
         code = "access_denied" if status_code in (401, 403) else "request_failed"
         message = "Access denied while querying repository." if code == "access_denied" else f"Hugging Face request failed: {err}"
-        print(json.dumps(build_error(repo_id, code, message), indent=2, sort_keys=False))
-        return 1
+        return response(repo_id, code=code, message=message, data=None)
     except Exception as err:
-        print(json.dumps(build_error(repo_id, "request_failed", f"Unexpected error: {err}"), indent=2, sort_keys=False))
-        return 1
+        return response(repo_id, code="request_failed", message=f"Unexpected error: {err}", data=None)
 
     files_map = get_repo_files_map(model_info)
+    log('files:', json.dumps(files_map, indent=2, sort_keys=False))
+
     model_card_text = load_model_card_text(repo_id, token)
     model_index = get_model_index(repo_id, token)
+    log('index:', json.dumps(model_index, indent=2, sort_keys=False))
     components = discover_components(model_index, files_map)
+    log('components:', json.dumps(components, indent=2, sort_keys=False))
 
     main_components = components["mains"]
     text_components = components["text_encoders"]
-    ae_component = components["ae"]
+    ae_components = components["ae"]
 
     main_files: list[str] = []
     for main_component in main_components:
@@ -662,7 +643,9 @@ def main() -> int:
     te_files: list[str] = []
     for te_component in text_components:
         te_files.extend(component_weight_files(te_component, files_map))
-    ae_files = component_weight_files(ae_component, files_map)
+    ae_files: list[str] = []
+    for ae_component in ae_components:
+        ae_files.extend(component_weight_files(ae_component, files_map))
 
     fs = hf.HfFileSystem(token=token)
 
@@ -693,8 +676,12 @@ def main() -> int:
         arch = arch_from_config(cfg, component_type="te")
         te_arches.append(arch if arch is not None else te_component)
 
-    ae_cfg = component_config(ae_component, repo_id, token)
-    ae_arch = arch_from_config(ae_cfg, component_type="ae")
+    ae_arches: list[str] = []
+    for ae_component in ae_components:
+        cfg = component_config(ae_component, repo_id, token)
+        arch = arch_from_config(cfg, component_type="ae")
+        ae_arches.append(arch if arch is not None else ae_component)
+
     model_class = class_from_model_index(model_index)
     if model_class is None:
         first_main_class = next((c for c in main_component_classes if isinstance(c, str) and c.strip()), None)
@@ -714,34 +701,39 @@ def main() -> int:
         "name": extract_name(model_info, repo_id),
         "version": extract_version(model_info, repo_id),
         "description": extract_description(model_info, model_card_text=model_card_text),
-        "released": release_date_iso(model_info),
-        "modified": modified_date_iso(model_info),
+        "released": extract_date(model_info, "created_at"),
+        "modified": extract_date(model_info, "last_modified"),
         "license": extract_license(model_info),
         "repo_id": repo_id,
         "pipeline": pipeline_value,
         "gated": gated_value,
-        "size": format_millions(size_total_raw, "MB"),
+        "size": size_total_raw,
+        "size_gb": round(size_total_raw / (1024**3), 2) if isinstance(size_total_raw, int) else None,
         "class": model_class,
         "dit": ", ".join(main_dit_entries) if len(main_dit_entries) > 0 else None,
-        "dit_params": format_millions(model_params_raw, "M"),
-        "dit_size": format_millions(model_size_raw, "MB"),
+        "dit_params": model_params_raw,
+        "dit_size": model_size_raw,
+        "dit_size_gb": round(model_size_raw / (1024**3), 2) if isinstance(model_size_raw, int) else None,
         "te": ", ".join(te_arches) if len(te_arches) > 0 else None,
-        "te_params": format_millions(te_params_raw, "M"),
-        "te_size": format_millions(te_size_raw, "MB"),
-        "ae": ae_arch,
+        "te_params": te_params_raw,
+        "te_size": te_size_raw,
+        "te_size_gb": round(te_size_raw / (1024**3), 2) if isinstance(te_size_raw, int) else None,
+        "ae": ", ".join(ae_arches) if len(ae_arches) > 0 else None,
+        "ae_size": ae_size_raw,
+        "ae_size_gb": round(ae_size_raw / (1024**3), 2) if isinstance(ae_size_raw, int) else None,
         "downloads": downloads_int,
         "tags": tags,
     }
 
     data["tags"] = dedupe_tags_against_fields(data["tags"], data)
-
-    output = {
-        "ok": True,
-        "data": data,
-    }
-    print(json.dumps(output, indent=2, sort_keys=False))
-    return 0
+    return response(repo_id, code="ok", message="Model metadata retrieved successfully", data=data)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    quiet = False
+    parser = argparse.ArgumentParser(description="Query Hugging Face model metadata and component stats.")
+    parser.add_argument("repo_id", help="Strict Hugging Face repo id in format owner/name")
+    _args = parser.parse_args()
+    _repo_id = _args.repo_id.strip()
+
+    raise SystemExit(search(_repo_id))

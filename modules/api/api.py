@@ -1,15 +1,17 @@
 import os
 from threading import Lock
 from secrets import compare_digest
-from fastapi import FastAPI, APIRouter, Depends, Request
+from typing import Optional
+from fastapi import FastAPI, APIRouter, Depends, Request, Cookie
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.exceptions import HTTPException
 from modules import errors, shared, paths
 from modules.logger import log
-from modules.api import models, endpoints, script, helpers, server, generate, process, control, docs, gpu
+from modules.api import models, endpoints, script, helpers, server, generate, process, control, video, docs, gpu
 
 
 errors.install()
+auth_map = []
 
 
 class Api:
@@ -17,12 +19,12 @@ class Api:
         self.credentials = {}
         if shared.cmd_opts.auth:
             for auth in shared.cmd_opts.auth.split(","):
-                user, password = auth.split(":")
+                user, password = auth.split(":", 1)
                 self.credentials[user.replace('"', '').strip()] = password.replace('"', '').strip()
         if shared.cmd_opts.auth_file:
             with open(shared.cmd_opts.auth_file, encoding="utf8") as file:
                 for line in file.readlines():
-                    user, password = line.split(":")
+                    user, password = line.split(":", 1)
                     self.credentials[user.replace('"', '').strip()] = password.replace('"', '').strip()
         self.router = APIRouter()
         if shared.cmd_opts.docs:
@@ -33,42 +35,51 @@ class Api:
         self.generate = generate.APIGenerate(queue_lock)
         self.process = process.APIProcess(queue_lock)
         self.control = control.APIControl(queue_lock)
+        self.video = video.APIVideo(queue_lock)
         # compatibility api
         self.text2imgapi = self.generate.post_text2img
         self.img2imgapi = self.generate.post_img2img
 
     def register(self):
         # fetch js/css
-        self.add_api_route("/js", server.get_js, methods=["GET"], auth=False)
+        self.add_api_route("/js", server.get_js, methods=["GET"], auth=False, tags=["Base"])
+        self.add_api_route("/manifest", server.get_manifest, methods=["GET"], auth=False, tags=["Base"])
+        self.add_api_route("/icon", server.get_icon, methods=["GET"], auth=False, tags=["Base"])
 
         # server api
-        self.add_api_route("/sdapi/v1/motd", server.get_motd, methods=["GET"], response_model=str)
-        self.add_api_route("/sdapi/v1/log", server.get_log, methods=["GET"], response_model=list[str])
-        self.add_api_route("/sdapi/v1/log", server.post_log, methods=["POST"])
-        self.add_api_route("/sdapi/v1/start", self.get_session_start, methods=["GET"])
-        self.add_api_route("/sdapi/v1/version", server.get_version, methods=["GET"])
-        self.add_api_route("/sdapi/v1/torch", server.get_torch, methods=["GET"])
-        self.add_api_route("/sdapi/v1/status", server.get_status, methods=["GET"], response_model=models.ResStatus)
-        self.add_api_route("/sdapi/v1/platform", server.get_platform, methods=["GET"])
-        self.add_api_route("/sdapi/v1/progress", server.get_progress, methods=["GET"], response_model=models.ResProgress)
-        self.add_api_route("/sdapi/v1/history", server.get_history, methods=["GET"], response_model=list[models.ResHistory])
-        self.add_api_route("/sdapi/v1/interrupt", server.post_interrupt, methods=["POST"])
-        self.add_api_route("/sdapi/v1/skip", server.post_skip, methods=["POST"])
-        self.add_api_route("/sdapi/v1/shutdown", server.post_shutdown, methods=["POST"])
-        self.add_api_route("/sdapi/v1/memory", server.get_memory, methods=["GET"], response_model=models.ResMemory)
-        self.add_api_route("/sdapi/v1/cmd-flags", server.get_cmd_flags, methods=["GET"], response_model=models.FlagsModel)
-        self.add_api_route("/sdapi/v1/gpu", gpu.get_gpu, methods=["GET"])
-        self.add_api_route("/sdapi/v1/gpu-smi", gpu.get_gpu_smi, methods=["GET"], response_model=list[models.ResGPU])
+        self.add_api_route("/sdapi/v1/motd", server.get_motd, methods=["GET"], response_model=str, tags=["Server"])
+        self.add_api_route("/sdapi/v1/log", server.get_log, methods=["GET"], response_model=list[str], tags=["Server"])
+        self.add_api_route("/sdapi/v1/log", server.post_log, methods=["POST"], status_code=204, tags=["Server"])
+        self.add_api_route("/sdapi/v1/start", self.get_session_start, methods=["GET"], tags=["Server"])
+        self.add_api_route("/sdapi/v1/version", server.get_version, methods=["GET"], tags=["Server"])
+        self.add_api_route("/sdapi/v1/torch", server.get_torch, methods=["GET"], tags=["Server"])
+        self.add_api_route("/sdapi/v1/status", server.get_status, methods=["GET"], response_model=models.ResStatus, tags=["Server"])
+        self.add_api_route("/sdapi/v1/platform", server.get_platform, methods=["GET"], tags=["Server"])
+        self.add_api_route("/sdapi/v1/progress", server.get_progress, methods=["GET"], response_model=models.ResProgress, tags=["Server"])
+        self.add_api_route("/sdapi/v1/interrupt", server.post_interrupt, methods=["POST"], status_code=204, tags=["Server"])
+        self.add_api_route("/sdapi/v1/skip", server.post_skip, methods=["POST"], status_code=204, tags=["Server"])
+        self.add_api_route("/sdapi/v1/shutdown", server.post_shutdown, methods=["POST"], status_code=204, tags=["Server"])
+        self.add_api_route("/sdapi/v1/restart", server.post_restart, methods=["POST"], status_code=204, tags=["Server"])
+        self.add_api_route("/sdapi/v1/memory", server.get_memory, methods=["GET"], response_model=models.ResMemory, tags=["Server"])
+        self.add_api_route("/sdapi/v1/cmd-flags", server.get_cmd_flags, methods=["GET"], response_model=models.FlagsModel, tags=["Server"])
+        self.add_api_route("/sdapi/v1/gpu", gpu.get_gpu, methods=["GET"], tags=["Server"], response_model=list[dict])
+        self.add_api_route("/sdapi/v1/gpu-smi", gpu.get_gpu_smi, methods=["GET"], response_model=list[models.ResGPU], tags=["Server"])
+        self.add_api_route("/sdapi/v1/history", server.get_history, methods=["GET"], response_model=list[models.ResHistory], tags=["Server"])
+        self.add_api_route("/sdapi/v1/storage", server.get_storage, methods=["GET"], response_model=list[models.ResStorage], tags=["Server"])
 
         # core api using locking
         self.add_api_route("/sdapi/v1/txt2img", self.generate.post_text2img, methods=["POST"], response_model=models.ResTxt2Img, tags=["Generation"])
         self.add_api_route("/sdapi/v1/img2img", self.generate.post_img2img, methods=["POST"], response_model=models.ResImg2Img, tags=["Generation"])
         self.add_api_route("/sdapi/v1/control", self.control.post_control, methods=["POST"], response_model=control.ResControl, tags=["Generation"])
+        self.add_api_route("/sdapi/v1/video", self.video.post_video, methods=["POST"], response_model=video.ResVideo, tags=["Generation"])
+        self.add_api_route("/sdapi/v1/process", self.process.extras_single_image_api, methods=["POST"], response_model=models.ResProcessImage, tags=["Processing"])
         self.add_api_route("/sdapi/v1/extra-single-image", self.process.extras_single_image_api, methods=["POST"], response_model=models.ResProcessImage, tags=["Processing"])
+        self.add_api_route("/sdapi/v1/process-batch", self.process.extras_batch_images_api, methods=["POST"], response_model=models.ResProcessBatch, tags=["Processing"])
         self.add_api_route("/sdapi/v1/extra-batch-images", self.process.extras_batch_images_api, methods=["POST"], response_model=models.ResProcessBatch, tags=["Processing"])
-        self.add_api_route("/sdapi/v1/preprocess", self.process.post_preprocess, methods=["POST"], tags=["Processing"])
-        self.add_api_route("/sdapi/v1/mask", self.process.post_mask, methods=["POST"], tags=["Processing"])
-        self.add_api_route("/sdapi/v1/detect", self.process.post_detect, methods=["POST"], tags=["Processing"])
+        self.add_api_route("/sdapi/v1/preprocess", self.process.post_preprocess, methods=["POST"], response_model=models.ResPreprocess, tags=["Processing"])
+        self.add_api_route("/sdapi/v1/mask", self.process.post_mask, methods=["POST"], response_model=process.ResMask, tags=["Processing"])
+        self.add_api_route("/sdapi/v1/detect", self.process.post_detect, methods=["POST"], response_model=process.ResFace, tags=["Processing"])
+        self.add_api_route("/sdapi/v1/detail", self.process.post_detail, methods=["POST"], response_model=models.ResDetail, tags=["Processing"])
         self.add_api_route("/sdapi/v1/prompt-enhance", self.process.post_prompt_enhance, methods=["POST"], response_model=models.ResPromptEnhance, tags=["Generation"])
 
         # api dealing with optional scripts
@@ -76,36 +87,44 @@ class Api:
         self.add_api_route("/sdapi/v1/script-info", script.get_script_info, methods=["GET"], response_model=list[models.ItemScript], tags=["Scripts"])
 
         # enumerator api
-        self.add_api_route("/sdapi/v1/preprocessors", self.process.get_preprocess, methods=["GET"], response_model=list[process.ItemPreprocess])
-        self.add_api_route("/sdapi/v1/masking", self.process.get_mask, methods=["GET"], response_model=process.ItemMask)
-        self.add_api_route("/sdapi/v1/samplers", endpoints.get_samplers, methods=["GET"], response_model=list[models.ItemSampler])
-        self.add_api_route("/sdapi/v1/upscalers", endpoints.get_upscalers, methods=["GET"], response_model=list[models.ItemUpscaler])
-        self.add_api_route("/sdapi/v1/sd-models", endpoints.get_sd_models, methods=["GET"], response_model=list[models.ItemModel])
-        self.add_api_route("/sdapi/v1/controlnets", endpoints.get_controlnets, methods=["GET"], response_model=list[str])
-        self.add_api_route("/sdapi/v1/face-restorers", endpoints.get_restorers, methods=["GET"], response_model=list[models.ItemDetailer])
-        self.add_api_route("/sdapi/v1/detailers", endpoints.get_detailers, methods=["GET"], response_model=list[models.ItemDetailer])
-        self.add_api_route("/sdapi/v1/prompt-styles", endpoints.get_prompt_styles, methods=["GET"], response_model=list[models.ItemStyle])
-        self.add_api_route("/sdapi/v1/embeddings", endpoints.get_embeddings, methods=["GET"], response_model=models.ResEmbeddings)
+        self.add_api_route("/sdapi/v1/preprocessors", self.process.get_preprocess, methods=["GET"], response_model=list[process.ItemPreprocess], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/masking", self.process.get_mask, methods=["GET"], response_model=process.ItemMask, tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/samplers", endpoints.get_samplers, methods=["GET"], response_model=list[models.ItemSampler], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/schedulers", endpoints.get_schedulers, methods=["GET"], response_model=list[models.ItemScheduler], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/upscalers", endpoints.get_upscalers, methods=["GET"], response_model=list[models.ItemUpscaler], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/sd-models", endpoints.get_sd_models, methods=["GET"], response_model=list[models.ItemModel], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/controlnets", endpoints.get_controlnets, methods=["GET"], response_model=list[str], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/control-models", endpoints.get_control_models, methods=["GET"], response_model=list[str], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/control-modes", endpoints.get_control_modes, methods=["GET"], response_model=dict[str, list[str]], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/face-restorers", endpoints.get_restorers, methods=["GET"], response_model=list[models.ItemDetailer], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/detailers", endpoints.get_detailers, methods=["GET"], response_model=list[models.ItemDetailer], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/prompt-styles", endpoints.get_prompt_styles, methods=["GET"], response_model=list[models.ItemStyle], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/embeddings", endpoints.get_embeddings, methods=["GET"], response_model=models.ResEmbeddings, tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/ip-adapters", endpoints.get_ip_adapters, methods=["GET"], response_model=list[str], tags=["Enumerators"])
         self.add_api_route("/sdapi/v1/wildcards", endpoints.get_wildcards, methods=["GET"], response_model=list[dict], tags=["Enumerators"])
-        self.add_api_route("/sdapi/v1/sd-vae", endpoints.get_sd_vaes, methods=["GET"], response_model=list[models.ItemVae])
-        self.add_api_route("/sdapi/v1/extensions", endpoints.get_extensions_list, methods=["GET"], response_model=list[models.ItemExtension])
-        self.add_api_route("/sdapi/v1/extra-networks", endpoints.get_extra_networks, methods=["GET"], response_model=list[models.ItemExtraNetwork])
-        self.add_api_route("/sdapi/v1/unets", endpoints.get_unets, methods=["GET"], response_model=list[models.ItemUNet])
+        self.add_api_route("/sdapi/v1/sd-vae", endpoints.get_sd_vaes, methods=["GET"], response_model=list[models.ItemVae], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/extensions", endpoints.get_extensions_list, methods=["GET"], response_model=list[models.ItemExtension], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/extra-networks", endpoints.get_extra_networks, methods=["GET"], response_model=list[models.ItemExtraNetwork], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/extra-network-detail", endpoints.get_extra_network_detail, methods=["GET"], response_model=models.ItemExtraNetworkFull, tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/extra-network-details", endpoints.get_extra_network_details, methods=["GET"], response_model=models.ResExtraNetworkDetails, tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/unets", endpoints.get_unets, methods=["GET"], response_model=list[models.ItemUNet], tags=["Enumerators"])
+        self.add_api_route("/sdapi/v1/video/models", self.video.get_video_models, methods=["GET"], response_model=list[video.ItemVideoModel], tags=["Enumerators"])
 
         # functional api
         self.add_api_route("/sdapi/v1/file", endpoints.get_file, methods=["GET"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/delete-image", endpoints.get_deleteimage, methods=["GET"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/delete-file", endpoints.get_deletefile, methods=["GET"], tags=["Functional"])
+        self.add_api_route("/sdapi/v1/video/file", self.video.get_video_file, methods=["GET"], tags=["Functional"])
+        self.add_api_route("/sdapi/v1/delete-image", endpoints.get_deleteimage, methods=["DELETE"], tags=["Functional"])
+        self.add_api_route("/sdapi/v1/delete-file", endpoints.get_deletefile, methods=["DELETE"], tags=["Functional"])
         self.add_api_route("/sdapi/v1/png-info", endpoints.get_pnginfo, methods=["GET"], response_model=models.ResImageInfo, tags=["Functional"])
         self.add_api_route("/sdapi/v1/png-info", endpoints.post_pnginfo, methods=["POST"], response_model=models.ResImageInfo, tags=["Functional"])
         self.add_api_route("/sdapi/v1/checkpoint", endpoints.get_checkpoint, methods=["GET"], tags=["Functional"])
         self.add_api_route("/sdapi/v1/checkpoint", endpoints.set_checkpoint, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/refresh-checkpoints", endpoints.post_refresh_checkpoints, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/unload-checkpoint", endpoints.post_unload_checkpoint, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/reload-checkpoint", endpoints.post_reload_checkpoint, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/lock-checkpoint", endpoints.post_lock_checkpoint, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/refresh-vae", endpoints.post_refresh_vae, methods=["POST"], tags=["Functional"])
-        self.add_api_route("/sdapi/v1/refresh-unets", endpoints.post_refresh_unets, methods=["POST"], tags=["Functional"])
+        self.add_api_route("/sdapi/v1/refresh-checkpoints", endpoints.post_refresh_checkpoints, methods=["POST"], status_code=204, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/unload-checkpoint", endpoints.post_unload_checkpoint, methods=["POST"], status_code=204, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/reload-checkpoint", endpoints.post_reload_checkpoint, methods=["POST"], status_code=204, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/lock-checkpoint", endpoints.post_lock_checkpoint, methods=["POST"], status_code=204, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/refresh-vae", endpoints.post_refresh_vae, methods=["POST"], status_code=204, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/refresh-unets", endpoints.post_refresh_unets, methods=["POST"], status_code=204, tags=["Functional"])
         self.add_api_route("/sdapi/v1/latents", endpoints.get_latent_history, methods=["GET"], response_model=list[str], tags=["Functional"])
         self.add_api_route("/sdapi/v1/latents", endpoints.post_latent_history, methods=["POST"], response_model=int, tags=["Functional"])
         self.add_api_route("/sdapi/v1/modules", endpoints.get_modules, methods=["GET"], tags=["Functional"])
@@ -130,7 +149,7 @@ class Api:
 
         # gallery api
         from modules.api import gallery
-        gallery.register_api(self.app)
+        gallery.register_api(self)
 
         # nudenet api
         from modules.api import nudenet
@@ -162,29 +181,50 @@ class Api:
     def add_api_route(self, path: str, fn, auth: bool = True, **kwargs):
         if auth and self.credentials:
             deps = list(kwargs.get('dependencies', []))
-            deps.append(Depends(self.auth))
+            deps.append(Depends(self.auth, use_cache=True))
             kwargs['dependencies'] = deps
         if shared.opts.subpath is not None and len(shared.opts.subpath) > 0:
             self.app.add_api_route(f'{shared.opts.subpath}{path}', endpoint=fn, **kwargs)
         self.app.add_api_route(path, endpoint=fn, **kwargs)
 
-    def auth(self, credentials: HTTPBasicCredentials = Depends(HTTPBasic())):
+    def add_auth(self, host: str, user: str, method: str):
+        msg = f"ip={host} user={user} method={method}"
+        if msg in auth_map:
+            return
+        auth_map.append(msg)
+        log.debug(f'Client auth: {msg}')
+
+    def auth(
+            self,
+            request: Request, # pylint: disable=unused-argument
+            credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False)),
+            access_token: Optional[str] = Cookie(default=None, alias="access_token"),  # Change alias to your cookie name
+            access_token_unsecure: Optional[str] = Cookie(default=None, alias="access-token-unsecure"),
+        ):
         if not self.credentials:
+            self.add_auth(host=request.client.host, user=credentials.username if credentials else None, method="none")
             return True
-        if credentials.username in self.credentials:
-            if compare_digest(credentials.password, self.credentials[credentials.username]):
+        if (credentials is not None) and (credentials.username in self.credentials):
+            if compare_digest(credentials.password, self.credentials[credentials.username]): # client user + encoded password
+                self.add_auth(host=request.client.host, user=credentials.username if credentials else None, method="digest")
                 return True
-            if hasattr(self.app, 'tokens') and (self.app.tokens is not None):
+            if hasattr(self.app, 'tokens') and (self.app.tokens is not None): # client sends token as password
                 if credentials.password in self.app.tokens.keys():
+                    self.add_auth(host=request.client.host, user=credentials.username if credentials else None, method="token")
                     return True
-        log.error(f'API authentication: user="{credentials.username}"')
+        cookie_token = access_token or access_token_unsecure
+        if cookie_token and hasattr(self.app, 'tokens') and (self.app.tokens is not None): # client sets cookie with token
+            if cookie_token in self.app.tokens.keys():
+                self.add_auth(host=request.client.host, user=None, method="cookie")
+                return True
+        log.error(f'API authentication: user="{credentials.username if credentials else None}"')
         raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"})
 
     def get_session_start(self, req: Request, agent: str | None = None):
         """Log a new browser session with client IP, authenticated user, and user-agent string."""
         token = req.cookies.get("access-token") or req.cookies.get("access-token-unsecure")
         user = self.app.tokens.get(token) if hasattr(self.app, 'tokens') else None
-        log.info(f'Browser session: user={user} client={req.client.host} agent={agent}')
+        log.info(f'Client session: user={user} client={req.client.host} agent={agent}')
         return {}
 
     def launch(self):

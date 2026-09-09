@@ -161,10 +161,10 @@ def img2img(id_task: str, state: str, mode: int,
             sampler_index,
             mask_blur, mask_alpha,
             vae_type, tiling, hidiffusion,
-            detailer_enabled, detailer_prompt, detailer_negative, detailer_steps, detailer_strength, detailer_resolution,
+            detailer_enabled, detailer_prompt, detailer_negative, detailer_steps, detailer_strength, detailer_resolution, detailer_classes,
             n_iter, batch_size,
             guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop,
-            cfg_scale, image_cfg_scale, diffusers_guidance_rescale, pag_scale, pag_adaptive, cfg_end,
+            cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end,
             refiner_start,
             clip_skip,
             denoising_strength,
@@ -230,6 +230,8 @@ def img2img(id_task: str, state: str, mode: int,
     elif mode == 4: # inpaint upload mask
         if init_img_inpaint is None:
             return [], '', '', 'Error: inpaint image not provided'
+        if init_mask_inpaint is None:
+            return [], '', '', 'Error: inpaint mask not provided'
         image = init_img_inpaint
         mask = init_mask_inpaint
     elif mode == 5: # process batch
@@ -278,6 +280,7 @@ def img2img(id_task: str, state: str, mode: int,
         detailer_steps=detailer_steps,
         detailer_strength=detailer_strength,
         detailer_resolution=detailer_resolution,
+        detailer_classes=detailer_classes,
         init_images=[image],
         mask=mask,
         mask_blur=mask_blur,
@@ -286,10 +289,10 @@ def img2img(id_task: str, state: str, mode: int,
         resize_context=resize_context,
         scale_by=scale_by,
         denoising_strength=denoising_strength,
-        image_cfg_scale=image_cfg_scale,
-        diffusers_guidance_rescale=diffusers_guidance_rescale,
-        pag_scale=pag_scale,
-        pag_adaptive=pag_adaptive,
+        cfg_image=cfg_image,
+        cfg_rescale=cfg_rescale,
+        cfg_true=cfg_true,
+        cfg_adaptive=cfg_adaptive,
         refiner_start=refiner_start,
         inpaint_full_res=inpaint_full_res != 0,
         inpaint_full_res_padding=inpaint_full_res_padding,
@@ -335,6 +338,7 @@ def img2img(id_task: str, state: str, mode: int,
     if p.is_batch:
         process_batch(p, img2img_batch_files, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, args)
         processed = processing.get_processed(p, [], p.seed, "")
+        processed = scripts_manager.scripts_img2img.after(p, processed, *args)
     else:
         processed = scripts_manager.scripts_img2img.run(p, *args)
         if processed is None:

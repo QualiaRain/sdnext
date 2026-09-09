@@ -1,10 +1,12 @@
 import io
 import os
+from pathlib import Path
 import time
 import base64
+from secrets import compare_digest
 from urllib.parse import quote, unquote
-from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
 from starlette.websockets import WebSocket, WebSocketState
 from pydantic import BaseModel, Field # pylint: disable=no-name-in-module
 from PIL import Image
@@ -14,8 +16,6 @@ from modules.paths import resolve_output_path
 
 
 debug = log.debug if os.environ.get('SD_BROWSER_DEBUG', None) is not None else lambda *args, **kwargs: None
-
-
 OPTS_FOLDERS = [
     "outdir_samples",
     "outdir_txt2img_samples",
@@ -35,6 +35,10 @@ OPTS_FOLDERS = [
 
 class ReqFiles(BaseModel):
     folder: str = Field(title="Folder")
+
+class ItemFolder(BaseModel):
+    path: str = Field(title="Path", description="Folder path")
+    label: str = Field(title="Label", description="Folder display label")
 
 ### ws connection manager
 
@@ -71,7 +75,7 @@ class ConnectionManager:
 
 ### api definitions
 
-def register_api(app: FastAPI): # register api
+def register_api(api): # register api
     manager = ConnectionManager()
 
     def get_video_thumbnail(filepath):
@@ -100,36 +104,67 @@ def register_api(app: FastAPI): # register api
             log.error(f'Gallery video: file="{filepath}" {e}')
             return {}
 
-    def get_image_thumbnail(filepath):
+    def get_image_thumbnail(filepath, exif: bool = True):
         try:
             stat_size, stat_mtime = modelstats.stat(filepath)
             if stat_size < 1024:
                 return {}
-            image = Image.open(filepath)
-            geninfo, _items = images.read_info_from_image(image)
-            h = shared.opts.extra_networks_card_size
-            w = shared.opts.extra_networks_card_size if shared.opts.browser_fixed_width else image.width * h // image.height
-            width, height = image.width, image.height
-            image = image.convert('RGB')
-            image.thumbnail((w, h), Image.Resampling.HAMMING)
-            buffered = io.BytesIO()
-            image.save(buffered, format='jpeg')
-            data_url = f'data:image/jpeg;base64,{base64.b64encode(buffered.getvalue()).decode("ascii")}'
-            image.close()
+            with Image.open(filepath) as image:
+                # 1. Grab original dimensions BEFORE draft mode alters them
+                width, height = image.width, image.height
+                if height == 0 or width == 0:
+                    log.error(f"Image: file={filepath} {image} invalid")
+                    return {}
+                # 2. Extract EXIF data early
+                geninfo = images.read_info_from_image(image)[0] if exif else None
+                # 3. Calculate intended thumbnail size
+                h = shared.opts.extra_networks_card_size
+                w = shared.opts.extra_networks_card_size if shared.opts.browser_fixed_width else max(1, (width * h) // height)
+                # 4. Apply JPEG Draft Mode which downsamples during load
+                if image.format == "JPEG":
+                    image.draft("RGB", (w, h))
+                elif image.mode != 'RGB':
+                    image = image.convert('RGB')
+                # 5. Perform final precision thumbnail scale down
+                image.thumbnail((w, h), Image.Resampling.HAMMING)
+                # 6. Compress and encode to Base64
+                buffered = io.BytesIO()
+                image.save(buffered, format='JPEG', quality=85, optimize=True)
+                b64_str = base64.b64encode(buffered.getbuffer()).decode("ascii")
+                data_url = f'data:image/jpeg;base64,{b64_str}'
             content = {
                 'exif': geninfo,
                 'data': data_url,
-                'width': width,
-                'height': height,
+                'width': width,   # Original width sent to client
+                'height': height, # Original height sent to client
                 'size': stat_size,
-                'mtime': stat_mtime.timestamp() * 1000, # JS timestamps use milliseconds
+                'mtime': stat_mtime.timestamp() * 1000,
             }
             return content
         except Exception as e:
-            log.error(f'Gallery image: file="{filepath}" {e}')
+            log.error(f'Gallery image failed: file="{filepath}" | Error: {e}')
             return {}
 
-    # @app.get('/sdapi/v1/browser/folders', response_model=List[str])
+    def ws_authenticated(ws: WebSocket):
+        if not api.credentials and not getattr(shared.cmd_opts, 'auth_file', None):
+            return True
+        token = ws.cookies.get('access-token') or ws.cookies.get('access-token-unsecure')
+        if token and hasattr(api.app, 'tokens') and (api.app.tokens is not None) and token in (api.app.tokens):
+            return True
+        auth_header = ws.headers.get('authorization')
+        if auth_header and auth_header.lower().startswith('basic '):
+            try:
+                payload = base64.b64decode(auth_header.split(' ', 1)[1]).decode('utf-8')
+                username, password = payload.split(':', 1)
+            except Exception:
+                return False
+            if username in api.credentials and compare_digest(password, api.credentials[username]):
+                return True
+            if hasattr(api.app, 'tokens') and (api.app.tokens is not None) and (password in api.app.tokens):
+                return True
+        return False
+
+    # @app.get('/sdapi/v1/browser/folders', response_model=list[dict])
     def get_folders():
         def make_folder(path, label=None):
             """Create folder entry with path and display label."""
@@ -173,18 +208,21 @@ def register_api(app: FastAPI): # register api
                 unique_folders.append(f)
                 if shared.demo is not None and path not in shared.demo.allowed_paths:
                     debug(f'Browser folders allow: {path}')
-                    shared.demo.allowed_paths.append(quote(path))
+                    shared.demo.allowed_paths.append(path)
         debug(f'Browser folders: {unique_folders}')
-        return JSONResponse(content=unique_folders)
+        return unique_folders
 
     # @app.get("/sdapi/v1/browser/thumb", response_model=dict)
-    async def get_thumb(file: str):
+    async def get_thumb(file: str, exif: bool = False):
         try:
             decoded = unquote(file).replace('%3A', ':')
+            allowed_dirs = shared.demo.allowed_paths
+            if not any(Path(folder).absolute() in Path(file).absolute().parents for folder in allowed_dirs):
+                raise HTTPException(status_code=403, detail=f"file {file}: must be in one of allowed directories")
             if decoded.lower().endswith('.mp4'):
                 return JSONResponse(content=get_video_thumbnail(decoded))
             else:
-                return JSONResponse(content=get_image_thumbnail(decoded))
+                return JSONResponse(content=get_image_thumbnail(decoded, exif))
         except Exception as e:
             log.error(f'Gallery: {file} {e}')
             content = { 'error': str(e) }
@@ -194,6 +232,9 @@ def register_api(app: FastAPI): # register api
     async def ht_files(folder: str):
         try:
             t0 = time.time()
+            allowed_dirs = shared.demo.allowed_paths
+            if not any(Path(folder).absolute() in Path(folder).absolute().parents for folder in allowed_dirs):
+                raise HTTPException(status_code=403, detail=f"folder {folder}: must be in one of allowed directories")
             files = files_cache.directory_files(folder, recursive=True)
             lines = []
             for f in files:
@@ -208,12 +249,16 @@ def register_api(app: FastAPI): # register api
             log.error(f'Gallery: {folder} {e}')
             return []
 
-    shared.api.add_api_route("/sdapi/v1/browser/folders", get_folders, methods=["GET"], response_model=list[str])
-    shared.api.add_api_route("/sdapi/v1/browser/thumb", get_thumb, methods=["GET"], response_model=dict)
-    shared.api.add_api_route("/sdapi/v1/browser/files", ht_files, methods=["GET"], response_model=list)
+    api.add_api_route("/sdapi/v1/browser/folders", get_folders, methods=["GET"], response_model=list[ItemFolder])
+    api.add_api_route("/sdapi/v1/browser/thumb", get_thumb, methods=["GET"], response_model=dict)
+    api.add_api_route("/sdapi/v1/browser/files", ht_files, methods=["GET"], response_model=list)
 
-    @app.websocket("/sdapi/v1/browser/files")
+    @api.app.websocket("/sdapi/v1/browser/files")
     async def ws_files(ws: WebSocket):
+        if not ws_authenticated(ws):
+            log.error(f'WS unauthorized: client={ws.client.host}')
+            await ws.close(code=1008)
+            return
         try:
             await manager.connect(ws)
             folder = await ws.receive_text()
@@ -233,5 +278,5 @@ def register_api(app: FastAPI): # register api
             t1 = time.time()
             log.debug(f'Gallery: type=ws folder="{folder}" files={numFiles} time={t1-t0:.3f}')
         except Exception as e:
-            debug(f'Browser WS error: {e}')
+            debug(f'WS error: {e}')
         manager.disconnect(ws)

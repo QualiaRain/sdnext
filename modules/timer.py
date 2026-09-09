@@ -10,11 +10,11 @@ except Exception:
 
 
 class Timer:
-    def __init__(self):
+    def __init__(self, profile=False):
         self.start = time.time()
         self.records = {}
         self.total = 0
-        self.profile = False
+        self.profile = profile
 
     def elapsed(self, reset=True):
         end = time.time()
@@ -28,9 +28,26 @@ class Timer:
             self.records[name] = 0
         self.records[name] += t
 
+    def rm(self, name):
+        if name in self.records:
+            del self.records[name]
+
+    def get(self, name):
+        return self.records.get(name, 0)
+
+    def set(self, name, t):
+        self.records[name] = t
+
     def ts(self, name, t):
         elapsed = time.time() - t
         self.add(name, elapsed)
+
+    def merge(self, other):
+        for k, v in other.records.items():
+            if k not in self.records:
+                self.records[k] = 0
+            self.records[k] += v
+        self.total += other.total
 
     def record(self, category=None, extra_time=0, reset=True):
         e = self.elapsed(reset)
@@ -41,35 +58,52 @@ class Timer:
         self.records[category] += e + extra_time
         self.total += e + extra_time
 
-    def summary(self, min_time=default_min_time, total=True):
+    def summary(self, min_time=default_min_time, max_time=-1, total=True):
         if self.profile:
             min_time = -1
         self.total = sum(self.records.values())
         res = f"total={self.total:.2f} " if total else ''
         additions = [x for x in self.records.items() if x[1] >= min_time]
+        if max_time > 0:
+            additions = [x for x in additions if x[1] <= max_time]
+        if not total:
+            additions = [x for x in additions if x[0] != 'total']
         additions = sorted(additions, key=lambda x: x[1], reverse=True)
         if not additions:
             return res
         res += " ".join([f"{category}={time_taken:.2f}" for category, time_taken in additions])
         return res
 
+    def max(self):
+        if not self.records:
+            return 0
+        return max(self.records.values())
+
     def get_total(self):
         return sum(self.records.values())
 
-    def dct(self, min_time=default_min_time):
+    def dct(self, min_time=default_min_time, no_total=False):
+        self.total = sum(self.records.values())
+        if no_total:
+            self.records.pop('total', None)
+        else:
+            self.records['total'] = self.total
         if self.profile:
             res = {k: round(v, 4) for k, v in self.records.items()}
-        self.total = sum(self.records.values())
-        self.records['total'] = self.total
-        res = {k: round(v, 2) for k, v in self.records.items() if v >= min_time}
+        else:
+            res = {k: round(v, 2) for k, v in self.records.items() if v >= min_time}
         res = {k: v for k, v in sorted(res.items(), key=lambda x: x[1], reverse=True)} # noqa: C416 # pylint: disable=unnecessary-comprehension
         return res
 
     def reset(self):
-        self.__init__()
+        self.records.clear()
+        self.__init__(self.profile)
 
 startup = Timer()
 process = Timer()
+video = Timer()
 launch = Timer()
 init = Timer()
 load = Timer()
+dynamo = Timer()
+autotune = Timer(profile=True)

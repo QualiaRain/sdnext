@@ -193,10 +193,10 @@ def gather_seq_scatter_heads_qkv(
     restore_shape: bool = True,
 ):
     """
-    A func to sync splited qkv tensor
+    A func to sync split qkv tensor
     qkv_tensor: the tensor we want to do alltoall with. The last dim must
         be the projection_idx, which we will split into 3 part. After
-        spliting, the gather idx will be projecttion_idx + 1
+        splitting, the gather idx will be projecttion_idx + 1
     seq_dim: gather_dim for all2all comm
     restore_shape: if True, output will has the same shape length as input
     """
@@ -357,7 +357,7 @@ def _broadcast_data(data, shape, dtype, src, group, async_op):
     return comms
 
 
-def _traverse(data: Any, op: Callable) -> Union[None, List, Dict, Any]:
+def _traverse(data: Any, op: Callable) -> Union[List, Dict, Any, None]:
     if isinstance(data, (list, tuple)):
         return [_traverse(sub_data, op) for sub_data in data]
     elif isinstance(data, dict):

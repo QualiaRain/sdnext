@@ -12,7 +12,13 @@ def create_toprow(is_img2img: bool = False, id_part: str | None = None, generate
         return [gr.Textbox.update(value=prompt), gr.Textbox.update(value=prompt_neg), gr.Dropdown.update(value=[])]
 
     def parse_style(styles):
-        return styles.split('|') if styles is not None else None
+        if isinstance(styles, str):
+            styles = [x.strip() for x in styles.split('|') if x.strip() != '']
+        elif isinstance(styles, list):
+            styles = [x.strip() for x in styles if x.strip() != '']
+        else:
+            styles = None
+        return styles
 
     if id_part is None:
         id_part = "img2img" if is_img2img else "txt2img"
@@ -64,36 +70,18 @@ def create_toprow(is_img2img: bool = False, id_part: str | None = None, generate
     return prompt, styles, negative_prompt, submit, reprocess, button_paste, button_extra, token_counter, token_button, negative_token_counter, negative_token_button
 
 
-def ar_change(ar, width, height):
-    if ar == 'AR':
-        return gr.update(), gr.update()
-    try:
-        (w, h) = [float(x) for x in ar.split(':')]
-    except Exception as e:
-        log.warning(f"Invalid aspect ratio: {ar} {e}")
-        return gr.update(), gr.update()
-    if w > h:
-        return gr.update(), gr.update(value=int(width * h / w))
-    elif w < h:
-        return gr.update(value=int(height * w / h)), gr.update()
-    else:
-        return gr.update(), gr.update()
-
-
-def create_resolution_inputs(tab, default_width=1024, default_height=1024):
-    width = gr.Slider(minimum=64, maximum=4096, step=8, label="Width", value=default_width, elem_id=f"{tab}_width")
-    height = gr.Slider(minimum=64, maximum=4096, step=8, label="Height", value=default_height, elem_id=f"{tab}_height")
+def create_resolution_inputs(tab, default_width=1024, default_height=1024, step=8):
+    width = gr.Slider(minimum=64, maximum=4096, step=step, label="Width", value=default_width, elem_id=f"{tab}_width")
+    height = gr.Slider(minimum=64, maximum=4096, step=step, label="Height", value=default_height, elem_id=f"{tab}_height")
     ar_list = ['AR'] + [x.strip() for x in shared.opts.aspect_ratios.split(',') if x.strip() != '']
-    ar_dropdown = gr.Dropdown(show_label=False, interactive=True, choices=ar_list, value=ar_list[0], elem_id=f"{tab}_ar", elem_classes=["ar-dropdown"])
-    for c in [ar_dropdown, width, height]:
-        c.change(fn=ar_change, inputs=[ar_dropdown, width, height], outputs=[width, height], show_progress='hidden')
+    gr.Dropdown(show_label=False, interactive=True, choices=ar_list, value=ar_list[0], elem_id=f"{tab}_ar", elem_classes=["ar-dropdown"])  # aspect-ratio linking wired client-side in ui/resolutionLock.ts
     res_switch_btn = ToolButton(value=ui_symbols.switch, elem_id=f"{tab}_res_btn_swap")
     res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress='hidden')
     return width, height
 
 
 def create_caption_button(tab: str, inputs: list | None = None, outputs: str | None = None, what: str = ''):
-    button_caption = gr.Button(ui_symbols.caption, elem_id=f"{tab}_caption_{what}", elem_classes=['caption'])
+    button_caption = gr.Button(ui_symbols.caption, elem_id=f"{tab}_caption_{what}", elem_classes=['caption', 'image-fit'])
     if inputs is not None and outputs is not None:
         button_caption.click(fn=caption.caption, inputs=inputs, outputs=[outputs])
     return button_caption
@@ -244,6 +232,11 @@ def create_sampler_options(tabname):
         log.debug(f'Sampler set options: {sampler_options}')
         shared.opts.save(silent=True)
 
+    def set_sampler_fallback(fallback):
+        log.debug(f'Sampler set options: fallback={fallback}')
+        shared.opts.schedulers_fallback = fallback
+        shared.opts.save(silent=True)
+
     def set_sampler_timesteps(timesteps):
         log.debug(f'Sampler set options: timesteps={timesteps}')
         shared.opts.schedulers_timesteps = timesteps
@@ -300,7 +293,7 @@ def create_sampler_options(tabname):
         sampler_sigma = gr.Dropdown(label='Sigma method', elem_id=f"{tabname}_sampler_sigma", choices=['default', 'karras', 'betas', 'exponential', 'lambdas', 'flowmatch'], value=shared.opts.schedulers_sigma, type='value')
         sampler_spacing = gr.Dropdown(label='Timestep spacing', elem_id=f"{tabname}_sampler_spacing", choices=['default', 'linspace', 'leading', 'trailing'], value=shared.opts.schedulers_timestep_spacing, type='value')
     with gr.Row(elem_classes=['flex-break']):
-        sampler_beta = gr.Dropdown(label='Beta schedule', elem_id=f"{tabname}_sampler_beta", choices=['default', 'linear', 'scaled', 'cosine', 'sigmoid', 'laplace'], value=shared.opts.schedulers_beta_schedule, type='value')
+        sampler_beta = gr.Dropdown(label='Beta schedule', elem_id=f"{tabname}_sampler_beta", choices=['default', 'linear', 'scaled', 'cosine', 'sigmoid'], value=shared.opts.schedulers_beta_schedule, type='value')
         sampler_prediction = gr.Dropdown(label='Prediction method', elem_id=f"{tabname}_sampler_prediction", choices=['default', 'epsilon', 'sample', 'v_prediction', 'flow_prediction'], value=shared.opts.schedulers_prediction_type, type='value')
     with gr.Row(elem_classes=['flex-break']):
         sampler_presets = gr.Dropdown(label='Timesteps presets', elem_id=f"{tabname}_sampler_presets", choices=['None', 'AYS SD15', 'AYS SDXL'], value='None', type='value')
@@ -323,6 +316,8 @@ def create_sampler_options(tabname):
         values += ['dynamic'] if shared.opts.data.get('schedulers_dynamic_shift', False) else []
         values += ['rescale'] if shared.opts.data.get('schedulers_rescale_betas', False) else []
         sampler_options = gr.CheckboxGroup(label='Options', elem_id=f"{tabname}_sampler_options", choices=options, value=values, type='value')
+    with gr.Row(elem_classes=['flex-break']):
+        sampler_fallback = gr.Checkbox(label='Fallback on invalid', value=shared.opts.schedulers_fallback, elem_id=f"{tabname}_sampler_fallback")
 
     sampler_sigma.change(fn=set_sampler_sigma, inputs=[sampler_sigma], outputs=[])
     sampler_spacing.change(fn=set_sampler_spacing, inputs=[sampler_spacing], outputs=[])
@@ -333,6 +328,7 @@ def create_sampler_options(tabname):
     sampler_order.change(fn=set_sampler_order, inputs=[sampler_order], outputs=[])
     sampler_shift.change(fn=set_sampler_shift, inputs=[sampler_shift, sampler_base_shift, sampler_max_shift], outputs=[])
     sampler_options.change(fn=set_sampler_options, inputs=[sampler_options], outputs=[])
+    sampler_fallback.change(fn=set_sampler_fallback, inputs=[sampler_fallback], outputs=[])
     sampler_sigma_adjust_val.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
     sampler_sigma_adjust_min.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
     sampler_sigma_adjust_max.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
@@ -393,14 +389,15 @@ def create_resize_inputs(tab, images, accordion=True, latent=False, non_zero=Tru
                                 height = gr.Slider(minimum=64 if non_zero else 0, maximum=8192, step=8, label=f"Height{prefix}" if non_zero else "Resize height", value=1024 if non_zero else 0, elem_id=f"{tab}{suffix}_height")
                             with gr.Column(elem_id=f"{tab}_column_fixed2", scale=1):
                                 ar_list = ['AR'] + [x.strip() for x in shared.opts.aspect_ratios.split(',') if x.strip() != '']
-                                ar_dropdown = gr.Dropdown(show_label=False, interactive=True, choices=ar_list, value=ar_list[0], elem_id=f"{tab}_resize_ar", elem_classes=["ar-dropdown"])
-                                for c in [ar_dropdown, width, height]:
-                                    c.change(fn=ar_change, inputs=[ar_dropdown, width, height], outputs=[width, height], show_progress='hidden')
+                                gr.Dropdown(show_label=False, interactive=True, choices=ar_list, value=ar_list[0], elem_id=f"{tab}_resize_ar", elem_classes=["ar-dropdown"])  # aspect-ratio linking wired client-side in ui/resolutionLock.ts
                                 res_switch_btn = ToolButton(value=ui_symbols.switch, elem_id=f"{tab}_resize_size_swap")
                                 res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress='hidden')
                                 detect_image_size_btn = ToolButton(value=ui_symbols.detect, elem_id=f"{tab}_resize_detect_size")
                                 el = tab.split('_')[0]
                                 detect_image_size_btn.click(fn=lambda w, h, _: (w or gr.update(), h or gr.update()), _js=f'currentImageResolution{el}', inputs=[dummy_component, dummy_component, dummy_component], outputs=[width, height], show_progress='hidden')
+                                # keep the kanvas stage synced to the resize sliders; .change fires on user and programmatic updates (detect, paste, swap) and writes nothing back
+                                width.change(fn=None, _js='notifyKanvasResize', inputs=[width, height], outputs=[], show_progress='hidden')
+                                height.change(fn=None, _js='notifyKanvasResize', inputs=[width, height], outputs=[], show_progress='hidden')
                     with gr.Tab(label="Scale", id=1, elem_id=f"{tab}_scale_tab_scale") as tab_scale_by:
                         scale_by = gr.Slider(minimum=0.05, maximum=8.0, step=0.05, label=f"Scale{prefix}" if non_zero else "Resize scale", value=1.0, elem_id=f"{tab}_scale")
                     if images is not None:

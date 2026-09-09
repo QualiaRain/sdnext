@@ -1,6 +1,7 @@
 import os
 import time
-from fastapi import Request, Depends
+from pathlib import Path
+from fastapi import Request, Depends, BackgroundTasks, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import FileResponse
 import installer
@@ -13,6 +14,12 @@ def get_js(request: Request):
     file = request.query_params.get("file", None)
     if (file is None) or (len(file) == 0):
         raise HTTPException(status_code=400, detail="file parameter is required")
+    # Security: validate path is within allowed directories
+    if shared.demo is None:
+        raise HTTPException(status_code=503, detail="server not ready")
+    allowed_dirs = shared.demo.allowed_paths
+    if not any(Path(folder).absolute() in Path(file).absolute().parents for folder in allowed_dirs):
+        raise HTTPException(status_code=403, detail=f"file {file}: must be in one of allowed directories")
     ext = file.split('.')[-1]
     if ext not in ['js', 'css', 'map', 'html', 'wasm', 'ttf', 'mjs', 'json']:
         raise HTTPException(status_code=400, detail=f"invalid file extension: {ext}")
@@ -37,6 +44,16 @@ def get_js(request: Request):
 
 def get_version():
     return installer.get_version()
+
+def get_icon():
+    icon_path = os.path.join(shared.script_path, "ui", "assets", "favicon.png")
+    return FileResponse(icon_path, media_type="image/png")
+
+def get_manifest():
+    from modules import paths
+    manifest_path = os.path.join(paths.script_path, "ui", "manifest", "manifest.json")
+    log.debug(f"API manifest={manifest_path}")
+    return FileResponse(manifest_path, media_type="application/json")
 
 def get_motd():
     import requests
@@ -79,22 +96,38 @@ def post_log(req: models.ReqPostLog):
         log.debug(f'UI: {req.debug}')
     elif req.error is not None:
         log.error(f'UI: {req.error}')
-    return {}
+    return Response(status_code=204)
 
-def post_shutdown():
-    log.info("Shutdown request received")
-    import sys
-    sys.exit(0)
+def post_shutdown(background_tasks: BackgroundTasks):
+    log.info("Server shutdown request received")
+    background_tasks.add_task(os._exit, 0)
+    return Response(status_code=204)
+
+def post_restart(background_tasks: BackgroundTasks):
+    log.info("Server restart request received")
+    from installer import restart
+    background_tasks.add_task(restart)
+    return Response(status_code=204)
 
 def get_cmd_flags():
     return vars(shared.cmd_opts)
 
 def get_history(req: models.ReqHistory = Depends()):
-    if req.id is not None and len(req.id) > 0:
-        res = [item for item in shared.state.state_history if item['id'] == req.id]
+    if req.id is not None and ((isinstance(req.id, str) and len(req.id) > 0) or isinstance(req.id, int)):
+        _id = str(req.id) if isinstance(req.id, int) else req.id
+        res = [item for item in shared.state.state_history if item['id'] == _id]
     else:
         res = shared.state.state_history
     res = [models.ResHistory(**item) for item in res]
+    return res
+
+def get_storage(req: models.ReqStorage = Depends()):
+    from modules.storage import check_storage
+    res = check_storage(folders=req.folder,
+                        types=req.types.split(',') if req.types else None,
+                        silent=True,
+                       )
+    res = [models.ResStorage(**loc.dict()) for loc in res]
     return res
 
 def get_progress(req: models.ReqProgress = Depends()):
@@ -126,10 +159,11 @@ def get_status():
 
 def post_interrupt():
     shared.state.interrupt()
-    return {}
+    return Response(status_code=204)
 
 def post_skip():
     shared.state.skip()
+    return Response(status_code=204)
 
 def get_memory():
     try:
@@ -163,4 +197,5 @@ def get_memory():
             cuda = { 'error': 'unavailable' }
     except Exception as err:
         cuda = { 'error': f'{err}' }
-    return models.ResMemory(ram = ram, cuda = cuda)
+    from modules import memstats
+    return models.ResMemory(ram = ram, cuda = cuda, model = memstats.model_stats())

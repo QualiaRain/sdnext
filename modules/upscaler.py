@@ -38,7 +38,7 @@ class Upscaler:
         self.device = shared.device
         self.img = None
         self.output = None
-        self.scale = 1
+        self.scale = 4
         self.half = not shared.cmd_opts.no_half
         self.pre_pad = 0
         self.mod_scale = None
@@ -98,7 +98,7 @@ class Upscaler:
         return scalers
 
     @abstractmethod
-    def do_upscale(self, img: Image.Image | Tensor, selected_model: str):
+    def do_upscale(self, img: Image.Image | Tensor, selected_model: str, output_type='pil'):
         return img
 
     def upscale(self, img: Image.Image | Tensor, scale, selected_model: str | None = None):
@@ -116,11 +116,11 @@ class Upscaler:
             for _ in range(3):
                 shape = (img.width, img.height)
                 img = self.do_upscale(img, selected_model)
-                if shape == (img.width, img.height):
+                if shape == (img.width, img.height): # no change, no point of running another iteration
                     break
-                if img.width >= dest_w and img.height >= dest_h:
+                if (abs(img.width - dest_w) <= 12 or img.width >= dest_w) or (abs(img.height - dest_h) <= 12 or img.height >= dest_h): # close enough, do not run one more iteration
                     break
-            if img.width != dest_w or img.height != dest_h:
+            if abs(img.width - dest_w) > 8 or abs(img.height - dest_h) > 8:
                 from modules.image import sharpfin
                 img = sharpfin.resize(img, (int(dest_w), int(dest_h)))
         shared.state.end(jobid)
@@ -145,10 +145,10 @@ class Upscaler:
         if info is None:
             log.error(f'Upscaler cannot match model: type={self.name} model="{path}"')
             return None
-        if info.local_data_path.startswith("http"):
+        if info.local_data_path is not None and info.local_data_path.startswith("http"):
             from modules.modelloader import load_file_from_url
             info.local_data_path = load_file_from_url(url=info.data_path, model_dir=self.model_download_path, progress=True)
-        if not os.path.isfile(info.local_data_path):
+        if info.local_data_path is not None and not os.path.isfile(info.local_data_path):
             log.error(f'Upscaler cannot find model: type={self.name} model="{info.local_data_path}"')
             return None
         return info
@@ -158,20 +158,36 @@ class UpscalerData:
     custom: bool = False
     name = None
     data_path = None
-    scale: int = 4
+    scale: int = 2
     scaler: Upscaler | None = None
     model: None
 
-    def __init__(self, name: str, path: str | None = None, upscaler: Upscaler | None = None, scale: int = 4, model=None):
+    def __init__(self, name: str, path: str | None = None, upscaler: Upscaler | None = None, scale: int = 0, model=None):
         self.name = name
         self.data_path = path
         self.local_data_path = path
         self.scaler = upscaler
-        self.scale = scale
+        if scale > 0:
+            self.scale = scale
+        elif '1x' in name.lower() or 'x1' in name.lower():
+            self.scale = 1
+        elif '2x' in name.lower() or 'x2' in name.lower():
+            self.scale = 2
+        elif '3x' in name.lower() or 'x3' in name.lower():
+            self.scale = 3
+        elif '4x' in name.lower() or 'x4' in name.lower():
+            self.scale = 4
+        elif '8x' in name.lower() or 'x8' in name.lower():
+            self.scale = 8
+        else:
+            self.scale = 2 # default scale to 2 if not specified
         self.model = model
 
     def __str__(self):
-        return f"UpscalerData(name={self.name}, path={self.data_path}, scale={self.scale})"
+        return f'UpscalerData(name="{self.name}" path="{self.data_path}" scale={self.scale})'
+
+    def __repr__(self):
+        return f'UpscalerData(name="{self.name}" path="{self.data_path}" scale={self.scale})'
 
 
 def compile_upscaler(model):

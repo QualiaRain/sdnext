@@ -1,10 +1,8 @@
 import argparse
 import os
-from proc.leres.pix2pix.util import util
-# import torch
-from proc.leres.pix2pix import models
-# import pix2pix.data
 import numpy as np
+from modules.control.proc.leres.pix2pix.util import util
+from modules.control.proc.leres.pix2pix import models
 
 class BaseOptions():
     """This class defines options used during both training and test time.
@@ -14,7 +12,7 @@ class BaseOptions():
     """
 
     def __init__(self):
-        """Reset the class; indicates the class hasn't been initailized"""
+        """Reset the class; indicates the class hasn't been initialized"""
         self.initialized = False
 
     def initialize(self, parser):

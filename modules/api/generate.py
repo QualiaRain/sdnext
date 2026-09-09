@@ -1,6 +1,6 @@
 from threading import Lock
 from fastapi.responses import JSONResponse
-from modules import errors, shared, scripts_manager, ui
+from modules import errors, shared, scripts_manager
 from modules.api import models, script, helpers
 from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
 from modules.paths import resolve_output_path
@@ -70,6 +70,7 @@ class APIGenerate:
             p.ip_adapter_starts = []
             p.ip_adapter_ends = []
             p.ip_adapter_images = []
+            p.ip_adapter_masks = []
             for ipadapter in request.ip_adapter:
                 if not ipadapter.images or len(ipadapter.images) == 0:
                     continue
@@ -79,7 +80,6 @@ class APIGenerate:
                 p.ip_adapter_starts.append(ipadapter.start)
                 p.ip_adapter_ends.append(ipadapter.end)
                 p.ip_adapter_images.append([helpers.decode_base64_to_image(x) for x in ipadapter.images])
-                p.ip_adapter_masks = []
                 if ipadapter.masks:
                     p.ip_adapter_masks.append([helpers.decode_base64_to_image(x) for x in ipadapter.masks])
             del request.ip_adapter
@@ -90,7 +90,7 @@ class APIGenerate:
         script_runner = scripts_manager.scripts_txt2img
         if not script_runner.scripts:
             script_runner.initialize_scripts(False)
-            ui.create_ui(None)
+            # ui.create_ui(None)
         if not self.default_script_arg_txt2img:
             self.default_script_arg_txt2img = script.init_default_script_args(script_runner)
         selectable_scripts, selectable_script_idx = script.get_selectable_script(txt2imgreq.script_name, script_runner)
@@ -141,7 +141,7 @@ class APIGenerate:
         script_runner = scripts_manager.scripts_img2img
         if not script_runner.scripts:
             script_runner.initialize_scripts(True)
-            ui.create_ui(None)
+            # ui.create_ui(None)
         if not self.default_script_arg_img2img:
             self.default_script_arg_img2img = script.init_default_script_args(script_runner)
         selectable_scripts, selectable_script_idx = script.get_selectable_script(img2imgreq.script_name, script_runner)

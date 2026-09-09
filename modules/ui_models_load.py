@@ -122,7 +122,8 @@ class Component:
                 self.type = 'variable'
             elif 'enum' in self.str:
                 self.type = 'enum'
-                self.enum = [v.name for v in self.cls]
+                enum_values = self.cls if self.cls is not None else ()
+                self.enum = [v.name for v in enum_values]
             elif inspect.isclass(signature.annotation):
                 self.type = 'class'
             elif inspect.ismodule(signature.annotation):
@@ -193,7 +194,7 @@ class Component:
                 elif os.path.isfile(self.local) and self.local.endswith('.gguf'):
                     debug_log(f'Model load component: local="{self.local}" type=gguf args={load_args} quant={quant_type}')
                     from modules import ggml
-                    return ggml.load_gguf(self.local, cls=self.cls, compute_dtype=self.dtype)
+                    return ggml.load_gguf_diffusers(self.local, cls=self.cls, compute_dtype=self.dtype)
                 else:
                     debug_log(f'Model load component: local="{self.local}" type=folder args={load_args} quant={quant_type}')
                     return self.cls.from_pretrained(self.local, **load_args, **quant_args, cache_dir=shared.opts.hfcache_dir)

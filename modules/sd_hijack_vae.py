@@ -27,7 +27,10 @@ def hijack_vae_decode(*args, **kwargs):
             latents = args[0].to(device=devices.device, dtype=shared.sd_model.vae.dtype) # upcast to vae dtype
             if hasattr(shared.sd_model.vae, '_asymmetric_upscale_vae'):
                 res = hijack_vae_upscale(latents, *args[1:], **kwargs)
-            else:
+            elif getattr(shared.sd_model, 'sdnext_vae_type', None) == 'Tiny':
+                from modules.video_models import video_vae
+                res = video_vae.vae_decode_tiny(latents) # None when the model has no tiny counterpart, and it says so
+            if res is None:
                 res = shared.sd_model.vae.orig_decode(latents, *args[1:], **kwargs)
             t1 = time.time()
             try:
@@ -71,9 +74,9 @@ def hijack_vae_encode(*args, **kwargs):
 
 
 def init_hijack(pipe):
-    if pipe is not None and hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode') and not hasattr(pipe.vae, 'orig_decode'):
+    if (pipe is not None) and hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode') and not hasattr(pipe.vae, 'orig_decode'):
         pipe.vae.orig_decode = pipe.vae.decode
         pipe.vae.decode = hijack_vae_decode
-    if pipe is not None and hasattr(pipe, 'vae') and hasattr(pipe.vae, 'encode') and not hasattr(pipe.vae, 'orig_encode'):
+    if (pipe is not None) and hasattr(pipe, 'vae') and hasattr(pipe.vae, 'encode') and not hasattr(pipe.vae, 'orig_encode'):
         pipe.vae.orig_encode = pipe.vae.encode
         pipe.vae.encode = hijack_vae_encode

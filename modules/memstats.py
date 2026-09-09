@@ -54,7 +54,11 @@ def ram_stats():
         res = process.memory_info()
         if 'total' not in ram:
             process = psutil.Process(os.getpid())
-            ram_total = 100 * res.rss / process.memory_percent()
+            mem_percent = process.memory_percent()
+            if mem_percent > 0:
+                ram_total = 100 * res.rss / mem_percent
+            else:
+                ram_total = res.rss
             ram_total = min(ram_total, get_docker_limit(), get_runpod_limit())
             ram['total'] = gb(ram_total)
         ram['rss'] = gb(res.rss)
@@ -97,7 +101,7 @@ def gpu_stats():
         if stats.get('num_ooms', 0) > 0:
             shared.state.oom = True
         gpu['active'] = gb(stats.get('active_bytes.all.current', 0))
-        gpu['peak'] = gb(stats.get('active_bytes.all.peak', 0))
+        gpu['peak'] = gb(stats.get('reserved_bytes.all.peak', 0))
         gpu['retries'] = stats.get('num_alloc_retries', 0)
         gpu['oom'] = stats.get('num_ooms', 0)
     except Exception as e:
@@ -109,6 +113,35 @@ def gpu_stats():
             # errors.display(e, 'GPU stats')
             fail_once = True
     return gpu
+
+
+def model_stats(as_gb: bool = False):
+    """Loaded-model bytes per component and device, so resident weights can be told from offloaded ones."""
+    try:
+        from modules.modeldata import model_data
+        pipe = model_data.sd_model # raw slot: the shared.sd_model property can trigger a model load
+        if pipe is None:
+            return {}
+        components = getattr(pipe, 'components', None) or ({ 'model': pipe } if isinstance(pipe, torch.nn.Module) else {})
+        placement = {}
+        seen = set()
+        for name, component in components.items():
+            if not isinstance(component, torch.nn.Module):
+                continue
+            devmap = {}
+            for tensors in (component.parameters(), component.buffers()):
+                for t in tensors:
+                    ptr = 0 if t.is_meta else t.untyped_storage().data_ptr()
+                    if ptr:
+                        if ptr in seen: # tied weights and offload rewraps share one storage across tensors
+                            continue
+                        seen.add(ptr)
+                    devmap[t.device.type] = devmap.get(t.device.type, 0) + t.numel() * t.element_size()
+            if devmap:
+                placement[name] = { d: gb(v) for d, v in devmap.items() } if as_gb else devmap
+        return placement
+    except Exception as err: # walk can race a reload or an offload rewrap; every caller is a diagnostic that must not take its caller down
+        return { 'error': f'{err}' }
 
 
 def memory_stats():
@@ -123,6 +156,8 @@ def memory_stats():
 
 
 def reset_stats():
+    # fn = f'{sys._getframe(3).f_code.co_name}:{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
+    # log.trace(f'Memory: reset {fn}')
     try:
         torch.cuda.reset_memory_stats()
     except Exception:

@@ -3,25 +3,45 @@ import sys
 import html
 import threading
 import time
-import cProfile
 from modules import shared, progress, errors, timer
 from modules.logger import log
 
 
-queue_lock = threading.Lock()
-debug = os.environ.get('SD_QUEUE_DEBUG', None) is not None
+_queue_lock = threading.Lock() # internal
+_queue_debug = os.environ.get('SD_QUEUE_DEBUG', None) is not None
+
+
+class Queue:
+    def __enter__(self):
+        _queue_lock.acquire()
+        if _queue_debug:
+            fn = f'{sys._getframe(3).f_code.co_name}:{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
+            log.debug(f'Queue: lock state={_queue_lock.locked()} fn={fn}')
+        return _queue_lock
+
+    def __exit__(self, exc_type, exc_val, exc_tb): # pylint: disable=unused-argument
+        if _queue_lock.locked():
+            _queue_lock.release()
+        if _queue_debug:
+            fn = f'{sys._getframe(3).f_code.co_name}:{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
+            log.debug(f'Queue: unlock state={_queue_lock.locked()} fn={fn}')
+        # no return: a truthy __exit__ suppresses the exception in flight
+
+
+queue_lock = Queue() # public lock for external use
 
 
 def get_lock():
-    if debug:
-        fn = f'{sys._getframe(3).f_code.co_name}:{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
-        log.debug(f'Queue: fn={fn} lock={queue_lock.locked()}')
     return queue_lock
+
+
+def is_locked():
+    return _queue_lock.locked()
 
 
 def wrap_queued_call(func):
     def f(*args, **kwargs):
-        with get_lock():
+        with Queue():
             res = func(*args, **kwargs)
         return res
     return f
@@ -36,7 +56,7 @@ def wrap_gradio_gpu_call(func, extra_outputs=None, name=None):
             progress.add_task_to_queue(id_task)
         else:
             id_task = None
-        with get_lock():
+        with Queue():
             progress.start_task(id_task)
             try:
                 res = func(*args, **kwargs)
@@ -65,8 +85,9 @@ def wrap_gradio_call(func, extra_outputs=None, add_stats=False, name=None):
         jobid = shared.state.begin(job_name, task_id=task_id)
         try:
             if shared.cmd_opts.profile:
-                pr = cProfile.Profile()
-                pr.enable()
+                errors.profile_stop()
+                errors.profile_print('BeforeWrapGradioCall')
+                errors.profile_start()
             res = func(*args, **kwargs)
             if res is None:
                 msg = "No result returned from function"
@@ -76,8 +97,9 @@ def wrap_gradio_call(func, extra_outputs=None, add_stats=False, name=None):
             else:
                 res = list(res)
             if shared.cmd_opts.profile:
-                pr.disable()
-                errors.profile(pr, 'Wrap')
+                errors.profile_stop()
+                errors.profile_print('AfterWrapGradioCall')
+                errors.profile_start()
         except Exception as e:
             errors.display(e, 'gradio call')
             res = extra_outputs_array or []

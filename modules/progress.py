@@ -18,8 +18,10 @@ debug_log = log.trace if debug else lambda *args, **kwargs: None
 
 def start_task(id_task):
     global current_task # pylint: disable=global-statement
-    current_task = id_task
-    pending_tasks.pop(id_task, None)
+    if current_task != id_task:
+        log.debug(f'State: start id={id_task} pending={len(pending_tasks)} finished={len(finished_tasks)}')
+        current_task = id_task
+        pending_tasks.pop(id_task, None)
 
 
 def record_results(id_task, res):
@@ -31,14 +33,26 @@ def record_results(id_task, res):
 def finish_task(id_task):
     global current_task # pylint: disable=global-statement
     if current_task == id_task:
+        log.debug(f'State: end id={id_task}')
         current_task = None
-    finished_tasks.append(id_task)
-    if len(finished_tasks) > 16:
+    if id_task not in finished_tasks:
+        finished_tasks.append(id_task)
+    if len(finished_tasks) > 1024*1024:
         finished_tasks.pop(0)
 
 
 def add_task_to_queue(id_job):
     pending_tasks[id_job] = time.time()
+
+
+def get_tasks():
+    return {
+        "current": current_task,
+        "pending": list(pending_tasks.keys()),
+        "finished": finished_tasks,
+        "results": recorded_results,
+    }
+
 
 
 class ProgressRequest(BaseModel):
@@ -48,6 +62,8 @@ class ProgressRequest(BaseModel):
 
 class InternalProgressResponse(BaseModel):
     job: str = Field(default=None, title="Job name", description="Internal job name")
+    job_timestamp: str|None = Field(default=None, title="Job timestamp", description="Timestamp of the job start")
+    job_time: float|None = Field(default=None, title="Job start time", description="Time of the job start")
     textinfo: str|None = Field(default=None, title="Info text", description="Info text used by WebUI.")
     # status fields
     active: bool = Field(title="Whether the task is being worked on right now")
@@ -97,10 +113,13 @@ def api_progress(req: ProgressRequest):
     if active and (req.id_live_preview != -1):
         have_image = shared.state.set_current_image()
         if have_image and shared.state.current_image is not None:
-            buffered = io.BytesIO()
-            shared.state.current_image.save(buffered, format='jpeg', quality=60)
-            b64 = base64.b64encode(buffered.getvalue())
-            live_preview = f'data:image/jpeg;base64,{b64.decode("ascii")}'
+            try:
+                buffered = io.BytesIO()
+                shared.state.current_image.save(buffered, format='jpeg', quality=60)
+                b64 = base64.b64encode(buffered.getvalue())
+                live_preview = f'data:image/jpeg;base64,{b64.decode("ascii")}'
+            except Exception:
+                live_preview = None
         else:
             live_preview = None
 
@@ -119,7 +138,8 @@ def api_progress(req: ProgressRequest):
         steps=steps,
         batch_no=batch_no,
         batch_count=batch_count,
-        job_timestamp=shared.state.time_start,
+        job_timestamp=shared.state.job_timestamp,
+        job_time=shared.state.time_start,
         eta=eta,
         live_preview=live_preview,
         id_live_preview=id_live_preview,

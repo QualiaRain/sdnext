@@ -53,17 +53,46 @@ def plaintext_to_html(text, elem_classes=None):
 def infotext_to_html(text):
     res = infotext.parse(text)
     prompt = res.get('Prompt', '')
-    negative = res.get('Negative prompt', '')
     res.pop('Prompt', None)
+    negative = res.get('Negative prompt', '')
     res.pop('Negative prompt', None)
+    template = res.get('Template', '')
+    res.pop('Template', None)
+    negative_template = res.get('Negative template', '')
+    res.pop('Negative template', None)
+
+    runtime = {}
+    if 'App' in res:
+        runtime['App'] = res.get('App', '')
+        res.pop('App', None)
+    if 'Version' in res:
+        runtime['Version'] = res.get('Version', '')
+        res.pop('Version', None)
+    if 'Pipeline' in res:
+        runtime['Pipeline'] = res.get('Pipeline', '')
+        res.pop('Pipeline', None)
+    if 'Operations' in res:
+        runtime['Operations'] = res.get('Operations', '')
+        res.pop('Operations', None)
+
     params = [f'{k}: {v}' for k, v in res.items() if v is not None and not k.endswith('-1') and not k.endswith('-2')]
     params = '| '.join(params) if len(params) > 0 else ''
+
+    runtime = [f'{k}: {v}' for k, v in runtime.items() if v is not None and not k.endswith('-1') and not k.endswith('-2')]
+    runtime = '| '.join(runtime) if len(runtime) > 0 else ''
+
     code = ''
-    if len(prompt) > 0:
+    if prompt is not None and len(prompt) > 0:
         code += f'<p><b>Prompt:</b> {html.escape(prompt)}</p>'
-    if len(negative) > 0:
+    if negative is not None and len(negative) > 0:
         code += f'<p><b>Negative:</b> {html.escape(negative)}</p>'
-    if len(params) > 0:
+    if template is not None and len(template) > 0:
+        code += f'<p><b>Template:</b> {html.escape(template)}</p>'
+    if negative_template is not None and len(negative_template) > 0:
+        code += f'<p><b>Negative Template:</b> {html.escape(negative_template)}</p>'
+    if runtime is not None and len(runtime) > 0:
+        code += f'<p><b>Runtime:</b> {html.escape(runtime)}</p>'
+    if params is not None and len(params) > 0:
         code += f'<p><b>Parameters:</b> {html.escape(params)}</p>'
     return code
 
@@ -120,7 +149,7 @@ def save_files(js_data, files, html_info, index):
                 for k, v in d.items():
                     setattr(self, k, v)
             self.prompt = getattr(self, 'prompt', None) or getattr(self, 'Prompt', None) or ''
-            self.negative_prompt = getattr(self, 'negative_prompt', None) or getattr(self, 'Negative_prompt', None) or ''
+            self.negative_prompt = getattr(self, 'negative_prompt', None) or getattr(self, 'Negative prompt', None) or ''
             self.sampler = getattr(self, 'sampler', None) or getattr(self, 'Sampler', None) or ''
             self.sampler_name = self.sampler
             self.seed = getattr(self, 'seed', None) or getattr(self, 'Seed', None) or 0
@@ -128,10 +157,10 @@ def save_files(js_data, files, html_info, index):
             self.width = getattr(self, 'width', None) or getattr(self, 'Width', None) or getattr(self, 'Size-1', None) or 0
             self.height = getattr(self, 'height', None) or getattr(self, 'Height', None) or getattr(self, 'Size-2', None) or 0
             self.cfg_scale = getattr(self, 'cfg_scale', None) or getattr(self, 'CFG scale', None) or 0
-            self.clip_skip = getattr(self, 'clip_skip', None) or getattr(self, 'Clip skip', None) or 1
+            self.clip_skip = getattr(self, 'clip_skip', None) or getattr(self, 'CLiP-skip', None) or 1
             self.denoising_strength = getattr(self, 'denoising_strength', None) or getattr(self, 'Denoising', None) or 0
             self.index_of_first_image = getattr(self, 'index_of_first_image', 0)
-            self.subseed = getattr(self, 'subseed', None) or getattr(self, 'Subseed', None)
+            self.subseed = getattr(self, 'subseed', None) or getattr(self, 'Variation seed', None)
             self.styles = getattr(self, 'styles', None) or getattr(self, 'Styles', None) or []
             self.styles = [s.strip() for s in self.styles.split(',')] if isinstance(self.styles, str) else self.styles
 
@@ -155,6 +184,8 @@ def save_files(js_data, files, html_info, index):
         if index < len(files):
             files = [files[index]]
             start_index = index
+        elif len(files) == 1:
+            start_index = 0
         else:
             log.error(f'Save: index={index} first={p.index_of_first_image} files={len(files)} out of range')
             files = []
@@ -239,6 +270,8 @@ def save_files(js_data, files, html_info, index):
 
 def open_folder(result_gallery, gallery_index = 0):
     try:
+        if gallery_index >= len(result_gallery):
+            gallery_index = 0
         folder = os.path.dirname(result_gallery[gallery_index]['name'])
     except Exception:
         folder = shared.opts.outdir_samples
@@ -263,7 +296,7 @@ def open_folder(result_gallery, gallery_index = 0):
         subprocess.Popen([opener, path])  # pylint: disable=consider-using-with
 
 
-def create_output_panel(tabname, preview=True, prompt=None, height=None, transfer=True, scale=1, result_info=None):
+def create_output_panel(tabname, preview=True, prompt=None, height=None, transfer=True, scale=1, result_info=None, html_log_val=''):
     with gr.Column(variant='panel', elem_id=f"{tabname}_results", scale=scale):
         with gr.Group(elem_id=f"{tabname}_gallery_container"):
             if tabname == "txt2img":
@@ -315,7 +348,7 @@ def create_output_panel(tabname, preview=True, prompt=None, height=None, transfe
                 html_info = gr.HTML(elem_id=f'html_info_{tabname}', elem_classes="infotext", visible=False) # contains raw infotext as returned by wrapped call
                 html_info_formatted = gr.HTML(elem_id=f'html_info_formatted_{tabname}', elem_classes="infotext", visible=True) # contains html formatted infotext
                 html_info.change(fn=infotext_to_html, inputs=[html_info], outputs=[html_info_formatted], show_progress='hidden')
-                html_log = gr.HTML(elem_id=f'html_log_{tabname}')
+                html_log = gr.HTML(elem_id=f'html_log_{tabname}', elem_classes=["hint"], value=html_log_val)
                 generation_info = gr.Textbox(visible=False, elem_id=f'generation_info_{tabname}')
                 generation_info_button = gr.Button(visible=False, elem_id=f"{tabname}_generation_info_button")
 

@@ -94,9 +94,9 @@ class Agent:
         return result
 
     @overload
-    def __init__(self, name: str): ...
+    def __init__(self, name: str): ... # ty: ignore
     @overload
-    def __init__(self, device: 'torch.types.Device'): ...
+    def __init__(self, device: 'torch.types.Device'): ... # ty: ignore
 
     def __init__(self, arg):
         if isinstance(arg, str):
@@ -113,36 +113,30 @@ class Agent:
         else:
             self.arch = MicroArchitecture.GCN
         self.is_apu = (self.gfx_version & 0xFFF0 == 0x1150) or self.gfx_version in (0x801, 0x902, 0x90c, 0x1013, 0x1033, 0x1035, 0x1036, 0x1103,)
-        self.blaslt_supported = False if blaslt_tensile_libpath is None else os.path.exists(os.path.join(blaslt_tensile_libpath, f"TensileLibrary_lazy_{self.name}.dat"))
+        blaslt_filename = f"TensileLibrary_lazy_{self.name}.dat"
+        if blaslt_tensile_libpath is None:
+            self.blaslt_supported = False
+        else:
+            search_paths = (
+                os.path.join(blaslt_tensile_libpath, blaslt_filename),
+                os.path.join(blaslt_tensile_libpath, blaslt_filename + ".zlib"),
+                os.path.join(blaslt_tensile_libpath, self.name, blaslt_filename),
+                os.path.join(blaslt_tensile_libpath, self.name, blaslt_filename + ".zlib"),
+            )
+            self.blaslt_supported = any(os.path.exists(p) for p in search_paths)
 
     def __str__(self) -> str:
         return self.name
 
+    def __repr__(self) -> str:
+        return f"Agent(name={self.name} gfx={hex(self.gfx_version)} arch={self.arch} apu={self.is_apu} blaslt={self.blaslt_supported})"
+
     @property
     def therock(self) -> str | None:
-        if (self.gfx_version & 0xFFF0) == 0x1200:
-            return "v2/gfx120X-all"
-        if (self.gfx_version & 0xFFF0) == 0x1100:
-            return "v2/gfx110X-all"
-        if self.gfx_version == 0x1150:
-            return "v2-staging/gfx1150"
-        if self.gfx_version == 0x1151:
-            return "v2/gfx1151"
-        if self.gfx_version == 0x1152:
-            return "v2-staging/gfx1152"
-        if self.gfx_version == 0x1153:
-            return "v2-staging/gfx1153"
-        if self.gfx_version in (0x1030, 0x1031, 0x1032, 0x1034,):
-            return "v2-staging/gfx103X-dgpu"
-        #if (self.gfx_version & 0xFFF0) == 0x1010:
-        #    return "gfx101X-dgpu"
-        #if (self.gfx_version & 0xFFF0) == 0x900:
-        #    return "gfx90X-dcgpu"
-        #if (self.gfx_version & 0xFFF0) == 0x940:
-        #    return "gfx94X-dcgpu"
-        #if self.gfx_version == 0x950:
-        #    return "gfx950-dcgpu"
-        return None
+        if self.gfx_version is None:
+            return None
+        gfx = self.name if self.name.startswith("gfx") else f"gfx{self.gfx_version:04x}"
+        return gfx
 
     def get_gfx_version(self) -> str | None:
         if self.gfx_version is None:
@@ -208,7 +202,7 @@ def find() -> ROCmEnvironment | None:
         return ROCmEnvironment(resolve_link("/opt/rocm"))
 
 
-def get_version() -> str:
+def get_version() -> str | None:
     try:
         if isinstance(environment, ROCmEnvironment):
             # We don't load the hip library that will not be used by PyTorch.
@@ -311,10 +305,10 @@ if sys.platform == "win32":
                 # use cpu instead of crashing
                 torch.cuda.is_available = lambda: False
 
-            agent = get_hip_agent()
+            _agent = get_hip_agent()
             log.debug(f'ROCm: selected={agents}')
-            if not agent.blaslt_supported:
-                log.warning(f'ROCm: hipBLASLt unavailable agent={agent}')
+            # if not agent.blaslt_supported:
+            #     log.warning(f'ROCm: hipBLASLt unavailable agent={agent}')
 
             if sys.platform == "win32":
                 apply_triton_patches()
@@ -371,10 +365,9 @@ else: # sys.platform != "win32"
     def rocm_init():
         try:
             from modules.devices import get_hip_agent
-
-            agent = get_hip_agent()
-            if not agent.blaslt_supported:
-                log.debug(f'ROCm: hipBLASLt unavailable agent={agent}')
+            _agent = get_hip_agent()
+            # if not agent.blaslt_supported:
+            #    log.debug(f'ROCm: hipBLASLt unavailable agent={agent}')
         except Exception as e:
             return False, e
         return True, None

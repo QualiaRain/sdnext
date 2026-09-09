@@ -1,6 +1,6 @@
 import re
 import inspect
-from typing import Any, Optional, Union
+from typing import Any, Optional
 from collections.abc import Callable
 from pydantic import BaseModel, Field, create_model
 from pydantic import VERSION
@@ -62,8 +62,8 @@ class PydanticModelGenerator:
         additional_fields: list[dict[str, Any]] | None = None,
         exclude_fields: list | None = None,
     ):
-        if exclude_fields is None:
-            exclude_fields = []
+        additional_fields = additional_fields or []
+        exclude_fields = exclude_fields or []
         def field_type_generator(_k, v):
             field_type = v.annotation
             return Optional[field_type]
@@ -153,11 +153,11 @@ class ItemUNet(BaseModel):
 class ItemExtraNetwork(BaseModel):
     name: str = Field(title="Name", description="Network short name")
     type: str = Field(title="Type", description="Network type (lora, checkpoint, embedding, etc.)")
-    title: str | None = Field(title="Title", description="Display title")
-    fullname: str | None = Field(title="Fullname", description="Fully qualified network name")
-    filename: str | None = Field(title="Filename", description="Path to the network file")
-    hash: str | None = Field(title="Hash", description="Short hash identifier")
-    preview: str | None = Field(title="Preview image URL", description="URL to the preview thumbnail")
+    title: str | None = Field(default=None, title="Title", description="Display title")
+    fullname: str | None = Field(default=None, title="Fullname", description="Fully qualified network name")
+    filename: str | None = Field(default=None, title="Filename", description="Path to the network file")
+    hash: str | None = Field(default=None, title="Hash", description="Short hash identifier")
+    preview: str | None = Field(default=None, title="Preview image URL", description="URL to the preview thumbnail")
     version: str | None = Field(default=None, title="Model version or class", description="Model version string or architecture class")
     tags: str | None = Field(default=None, title="Tags", description="Pipe-separated tag list")
 
@@ -217,7 +217,7 @@ class ItemFace(BaseModel):
     mode: str = Field(title="Mode", default="FaceID", description="The mode to use (available values: FaceID, FaceSwap, PhotoMaker, InstantID).")
     source_images: list[str] = Field(title="Source Images", description="Source face images, must be base64 encoded containing the image's data.")
     ip_model: str = Field(title="IPAdapter Model", default="FaceID Base", description="The IPAdapter model to use.")
-    ip_override_sampler: bool = Field(title="IPAdapter Override Sampler", default=True, description="Should the sampler be overriden?")
+    ip_override_sampler: bool = Field(title="IPAdapter Override Sampler", default=True, description="Should the sampler be overridden?")
     ip_cache_model: bool = Field(title="IPAdapter Cache", default=True, description="Should the IPAdapter model be cached?")
     ip_strength: float = Field(title="IPAdapter Strength", default=1, ge=0, le=2, description="IPAdapter strength of the source images, must be between 0.0 and 2.0.")
     ip_structure: float = Field(title="IPAdapter Structure", default=1, ge=0, le=1, description="IPAdapter structure to use, must be between 0.0 and 1.0.")
@@ -273,7 +273,7 @@ ReqTxt2Img = PydanticModelGenerator(
     "StableDiffusionProcessingTxt2Img",
     StableDiffusionProcessingTxt2Img,
     [
-        {"key": "sampler_index", "type": Union[int, str], "default": 0},
+        {"key": "sampler_index", "type": int | str, "default": 0},
         {"key": "sampler_name", "type": str, "default": "Default"},
         {"key": "hr_sampler_name", "type": str, "default": "Same as primary"},
         {"key": "script_name", "type": Optional[str], "default": ""},
@@ -293,7 +293,7 @@ if not hasattr(ReqTxt2Img, "__config__"):
 StableDiffusionTxt2ImgProcessingAPI = ReqTxt2Img
 
 class ResTxt2Img(BaseModel):
-    images: list[str] = Field(default=None, title="Image", description="The generated images in base64 format.")
+    images: list[str] | None = Field(default=None, title="Image", description="The generated images in base64 format.")
     parameters: dict = Field(title="Parameters", description="The request parameters echoed back.")
     info: str = Field(title="Info", description="Generation info string with all parameters used.")
 
@@ -301,8 +301,8 @@ ReqImg2Img = PydanticModelGenerator(
     "StableDiffusionProcessingImg2Img",
     StableDiffusionProcessingImg2Img,
     [
-        {"key": "sampler_index", "type": Union[int, str], "default": 0},
-        {"key": "sampler_name", "type": str, "default": "UniPC"},
+        {"key": "sampler_index", "type": int | str, "default": 0},
+        {"key": "sampler_name", "type": str, "default": "Default"},
         {"key": "hr_sampler_name", "type": str, "default": "Same as primary"},
         {"key": "init_images", "type": list, "default": None},
         {"key": "denoising_strength", "type": float, "default": 0.5},
@@ -325,7 +325,7 @@ if not hasattr(ReqImg2Img, "__config__"):
 StableDiffusionImg2ImgProcessingAPI = ReqImg2Img
 
 class ResImg2Img(BaseModel):
-    images: list[str] = Field(default=None, title="Image", description="The generated images in base64 format.")
+    images: list[str] | None = Field(default=None, title="Image", description="The generated images in base64 format.")
     parameters: dict = Field(title="Parameters", description="The request parameters echoed back.")
     info: str = Field(title="Info", description="Generation info string with all parameters used.")
 
@@ -343,6 +343,7 @@ class ReqProcess(BaseModel):
     upscaler_1: str = Field(default="None", title="Main upscaler", description=f"The name of the main upscaler to use, it has to be one of this list: {' , '.join([x.name for x in shared.sd_upscalers])}")
     upscaler_2: str = Field(default="None", title="Refine upscaler", description=f"The name of the secondary upscaler to use, it has to be one of this list: {' , '.join([x.name for x in shared.sd_upscalers])}")
     extras_upscaler_2_visibility: float = Field(default=0, title="Refine upscaler visibility", ge=0, le=1, allow_inf_nan=False, description="Sets the visibility of secondary upscaler, values should be between 0 and 1.")
+    script_args: dict | None = Field(default=None, title="Script args", description="Per-script arguments keyed by script name, e.g. {\"Detailer\": {\"strength\": 0.5}, \"Remove background\": {\"model\": \"u2net\"}}.")
 
 class ResProcess(BaseModel):
     html_info: str = Field(title="HTML info", description="A series of HTML tags containing the process info.")
@@ -359,6 +360,7 @@ class ReqPromptEnhance(BaseModel):
     prefix: Optional[str] = Field(title="Prefix", default=None, description="Text prepended to enhanced prompt")
     suffix: Optional[str] = Field(title="Suffix", default=None, description="Text appended to enhanced prompt")
     do_sample: Optional[bool] = Field(title="Sample", default=None, description="Enable sampling")
+    min_tokens: Optional[int] = Field(title="Min tokens", default=None, description="Min generation tokens")
     max_tokens: Optional[int] = Field(title="Max tokens", default=None, description="Max generation tokens")
     temperature: Optional[float] = Field(title="Temperature", default=None, description="Controls randomness in token selection (0=deterministic, higher=more creative)")
     repetition_penalty: Optional[float] = Field(title="Repetition penalty", default=None, description="Penalizes repeated tokens to reduce repetition (1.0=no penalty)")
@@ -369,13 +371,18 @@ class ReqPromptEnhance(BaseModel):
     use_vision: bool = Field(title="Use vision", default=True, description="Use vision if model supports it")
     prefill: Optional[str] = Field(title="Prefill", default=None, description="Text to prefill the model response with")
     keep_prefill: bool = Field(title="Keep prefill", default=False, description="Keep prefill text in the output")
+    custom_args: Optional[str] = Field(title="Custom args", default=None, description="Custom arguments for the model")
+    process_words: Optional[str] = Field(title="Banned words", default=None, description="List of words to process")
+    semantic_threshold: Optional[float] = Field(title="Semantic threshold", default=None, description="Semantic similarity threshold for processed words")
+    embedding_similarity: Optional[float] = Field(title="Embedding similarity", default=None, description="Embedding similarity threshold for processed words")
+    use_openai: Optional[bool] = Field(title="Use OpenAI", default=False, description="Use OpenAI API for model access")
 
 class ResPromptEnhance(BaseModel):
     prompt: str = Field(title="Prompt", description="Enhanced prompt")
     seed: int = Field(title="Seed", description="Seed used to generate the prompt")
 
 class ReqProcessImage(ReqProcess):
-    image: str = Field(default="", title="Image", description="Image to work on, must be a Base64 string containing the image's data.")
+    image: str = Field(..., title="Image", description="Image to work on, must be a Base64 string containing the image's data.")
 
 class ResProcessImage(ResProcess):
     image: str = Field(default=None, title="Image", description="The generated image in base64 format.")
@@ -385,6 +392,44 @@ class ReqProcessBatch(ReqProcess):
 
 class ResProcessBatch(ResProcess):
     images: list[str] = Field(title="Images", description="The generated images in base64 format.")
+
+class ReqDetail(BaseModel):
+    image: str = Field(title="Image", description="Base64-encoded input image to detail")
+    seed: int | None = Field(default=-1, title="Seed", description="Seed for inpainting passes (-1 = random)")
+    detailer_models: list[str] | None = Field(default=None, title="Detailer models", description="List of YOLO detailer model names to run; falls back to shared.opts.detailer_models when omitted")
+    detailer_prompt: str | None = Field(default=None, title="Detailer prompt", description="Override prompt for detailer pass; supports [PROMPT]/[prompt] splice tokens")
+    detailer_negative: str | None = Field(default=None, title="Detailer negative", description="Override negative prompt for detailer pass")
+    detailer_steps: int | None = Field(default=None, ge=0, le=99, title="Detailer steps")
+    detailer_strength: float | None = Field(default=None, ge=0.0, le=1.0, title="Detailer strength")
+    detailer_resolution: int | None = Field(default=None, ge=256, le=4096, title="Detailer resolution")
+    detailer_sampler: str | None = Field(default=None, title="Detailer sampler", description="Sampler name for the inpaint pass; a named sampler activates the scheduler overrides below, 'Default' keeps the model scheduler")
+    detailer_prediction: str | None = Field(default=None, title="Detailer prediction", description="Scheduler prediction type override (default/epsilon/sample/v_prediction/flow_prediction)")
+    detailer_shift: float | None = Field(default=None, ge=0.0, le=10.0, title="Detailer flow shift", description="Flow/sampler shift for the inpaint pass; needs a named sampler")
+    detailer_cfg_scale: float | None = Field(default=None, ge=0.0, le=30.0, title="Detailer guidance scale", description="CFG/guidance scale for the inpaint pass")
+    detailer_loworder: bool | None = Field(default=None, title="Detailer low order")
+    detailer_thresholding: bool | None = Field(default=None, title="Detailer thresholding")
+    detailer_dynamic: bool | None = Field(default=None, title="Detailer dynamic shift")
+    detailer_rescale: bool | None = Field(default=None, title="Detailer rescale betas")
+    detailer_classes: str | None = Field(default=None, title="Detailer classes", description="Comma-separated class allowlist (e.g. 'face,eye')")
+    detailer_conf: float | None = Field(default=None, ge=0.0, le=1.0, title="Min confidence")
+    detailer_iou: float | None = Field(default=None, ge=0.0, le=1.0, title="Max overlap (IoU)")
+    detailer_max: int | None = Field(default=None, ge=1, title="Max detections")
+    detailer_min_size: float | None = Field(default=None, ge=0.0, le=1.0, title="Min relative size")
+    detailer_max_size: float | None = Field(default=None, ge=0.0, le=1.0, title="Max relative size")
+    detailer_blur: int | None = Field(default=None, ge=0, le=100, title="Mask blur")
+    detailer_padding: int | None = Field(default=None, ge=0, le=100, title="Mask padding")
+    detailer_segmentation: bool | None = Field(default=None, title="Use segmentation", description="Use seg-mask instead of bbox (requires a -seg model)")
+    detailer_merge: bool | None = Field(default=None, title="Merge detections")
+    detailer_sort: bool | None = Field(default=None, title="Sort detections", description="Sort detections left-to-right for consistency")
+    detailer_sigma_adjust: float | None = Field(default=None, ge=0.5, le=1.5, title="Renoise sigma")
+    detailer_sigma_adjust_max: float | None = Field(default=None, ge=0.0, le=1.0, title="Renoise end")
+    detailer_include_detections: bool | None = Field(default=None, title="Include detections", description="Return annotated debug image alongside the detailed result")
+
+class ResDetail(BaseModel):
+    image: str = Field(title="Image", description="Detailed image (base64)")
+    detections: str | None = Field(default=None, title="Detections", description="Annotated debug image (base64) when detailer_include_detections=True")
+    seed: int = Field(default=-1, title="Seed", description="Effective seed used for the detailer pass")
+    info: str = Field(default='', title="Info", description="Postprocessing info string")
 
 class ReqImageInfo(BaseModel):
     image: str = Field(title="Image", description="The base64 encoded image")
@@ -398,7 +443,6 @@ class ReqGetLog(BaseModel):
     lines: int = Field(default=100, title="Lines", description="How many lines to return")
     clear: bool = Field(default=False, title="Clear", description="Should the log be cleared after returning the lines?")
 
-
 class ReqPostLog(BaseModel):
     json: dict | None = Field(default=None, title="Data", description="The data to log")
     message: str | None = Field(default=None, title="Message", description="The info message to log")
@@ -408,11 +452,15 @@ class ReqPostLog(BaseModel):
 class ReqHistory(BaseModel):
     id: int | str | None = Field(default=None, title="Task ID", description="Task ID")
 
+class ReqStorage(BaseModel):
+    folder: str | None = Field(default=None, title="Folder", description="Storage folder(s)")
+    types: str | None = Field(default=None, title="Types", description="Storage types to filter by")
+
 class ReqProgress(BaseModel):
     skip_current_image: bool = Field(default=False, title="Skip current image", description="Skip current image serialization")
 
 class ResProgress(BaseModel):
-    id: int | str | None = Field(title="TaskID", description="Task ID")
+    id: int | str | None = Field(default=None, title="TaskID", description="Task ID")
     progress: float = Field(title="Progress", description="The progress with a range of 0 to 1")
     eta_relative: float = Field(title="ETA in secs")
     state: dict = Field(title="State", description="The current state snapshot")
@@ -420,19 +468,32 @@ class ResProgress(BaseModel):
     textinfo: str | None = Field(default=None, title="Info text", description="Info text used by WebUI.")
 
 class ResHistory(BaseModel):
-    id: int | str | None = Field(title="ID", description="Task ID")
+    id: int | str | None = Field(default=None, title="ID", description="Task ID")
     job: str = Field(title="Job", description="Job name")
     op: str = Field(title="Operation", description="Job state")
-    timestamp: float | None = Field(title="Timestamp", description="Job timestamp")
-    duration: float | None = Field(title="Duration", description="Job duration")
+    timestamp: float | None = Field(default=None, title="Timestamp", description="Job timestamp")
+    duration: float | None = Field(default=None, title="Duration", description="Job duration")
     outputs: list[str] = Field(title="Outputs", description="List of filenames")
+
+class ResStorage(BaseModel):
+    name: str = Field(title="Name", description="Storage location name")
+    type: str = Field(title="Type", description="Storage location type")
+    folders: list[str] = Field(title="Folders", description="List of folders in the storage location")
+    paths: list[str] = Field(title="Paths", description="List of resolved paths in the storage location")
+    size: int = Field(title="Size", description="Total size of the storage location in bytes")
+    mtime: float = Field(title="Last modified", description="Last modified timestamp of the storage location")
+    nfiles: int = Field(title="Files", description="Number files in the storage location")
+    nfolders: int = Field(title="Folders", description="Number of folders in the storage location")
+    nsymlinks: int = Field(title="Symlinks", description="Number of symbolic links in the storage location")
+    nerrors: int = Field(title="Errors", description="Number of errors in the storage location")
+    time: float = Field(title="Time", description="Time taken to scan the storage location in seconds")
 
 class ResStatus(BaseModel):
     status: str = Field(title="Status", description="Current status")
     task: str = Field(title="Task", description="Current job")
-    timestamp: str | None = Field(title="Timestamp", description="Timestamp of the current job")
+    timestamp: str | None = Field(default=None, title="Timestamp", description="Timestamp of the current job")
     current: str = Field(title="Task", description="Current job")
-    id: int | str | None = Field(title="ID", description="ID of the current task")
+    id: int | str | None = Field(default=None, title="ID", description="ID of the current task")
     job: int = Field(title="Job", description="Current job")
     jobs: int = Field(title="Jobs", description="Total jobs")
     total: int = Field(title="Total Jobs", description="Total jobs")
@@ -491,6 +552,7 @@ class ResEmbeddings(BaseModel):
 class ResMemory(BaseModel):
     ram: dict = Field(title="RAM", description="System memory stats")
     cuda: dict = Field(title="CUDA", description="nVidia CUDA memory stats")
+    model: dict = Field(default={}, title="Model", description="Loaded model bytes per component and device")
 
 class ResScripts(BaseModel):
     txt2img: list[str] = Field(title="Txt2img", description="Titles of scripts (txt2img)")

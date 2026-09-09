@@ -4,7 +4,7 @@ import time
 import numpy as np
 import torch
 from PIL import Image
-from modules import shared, devices, processing, sd_models, errors, sd_hijack_hypertile, processing_vae, sd_models_compile, timer, modelstats, extra_networks, attention
+from modules import shared, processing, sd_models, errors, sd_hijack_hypertile, processing_vae, sd_models_compile, timer, modelstats, extra_networks, attention
 from modules.logger import log
 from modules.processing_helpers import resize_hires, calculate_base_steps, calculate_hires_steps, calculate_refiner_steps, save_intermediate, update_sampler, is_txt2img, is_refiner_enabled, get_job_name
 from modules.processing_args import set_pipeline_args
@@ -76,6 +76,7 @@ def process_pre(p: processing.StableDiffusionProcessing):
     log.info('Processing modifiers: apply')
     try:
         # apply-with-unapply
+        # sd_hijack_compile.install()
         sd_models_compile.check_deepcache(enable=True)
         ipadapter.apply(shared.sd_model, p)
         token_merge.apply_token_merging(shared.sd_model)
@@ -147,6 +148,8 @@ def process_base(p: processing.StableDiffusionProcessing):
     desc = 'Base'
     if 'detailer' in p.ops:
         desc = 'Detail'
+    p.prompts, p.network_data = extra_networks.parse_prompts(p.prompts, p.network_data)
+    extra_networks.activate_filtered(p) # networks must patch weights before prompt encode so te loras affect embeds
     base_args = set_pipeline_args(
         p=p,
         model=shared.sd_model,
@@ -156,9 +159,9 @@ def process_base(p: processing.StableDiffusionProcessing):
         negative_prompts_2=[p.refiner_negative] if len(p.refiner_negative) > 0 else p.negative_prompts,
         num_inference_steps=calculate_base_steps(p, use_refiner_start=use_refiner_start, use_denoise_start=use_denoise_start),
         eta=sched_eta,
-        guidance_scale=p.cfg_scale,
-        guidance_rescale=p.diffusers_guidance_rescale,
-        true_cfg_scale=p.pag_scale,
+        guidance_scale=p.cfg_scale if p.cfg_scale is not None and p.cfg_scale > -1 else None,
+        guidance_rescale=p.cfg_rescale if p.cfg_rescale is not None and p.cfg_rescale > -1 else None,
+        true_cfg_scale=p.cfg_true if p.cfg_true is not None and p.cfg_true > -1 else None,
         denoising_start=0 if use_refiner_start else p.refiner_start if use_denoise_start else None,
         denoising_end=p.refiner_start if use_refiner_start else 1 if use_denoise_start else None,
         num_frames=getattr(p, 'frames', 1),
@@ -176,9 +179,6 @@ def process_base(p: processing.StableDiffusionProcessing):
         modelstats.analyze()
     try:
         t0 = time.time()
-        p.prompts, p.network_data = extra_networks.parse_prompts(p.prompts, p.network_data)
-        extra_networks.activate(p, exclude=['text_encoder', 'text_encoder_2', 'text_encoder_3'])
-
         if hasattr(shared.sd_model, 'tgate') and getattr(p, 'gate_step', -1) > 0:
             base_args['gate_step'] = p.gate_step
             output = shared.sd_model.tgate(**base_args) # pylint: disable=not-callable
@@ -192,6 +192,8 @@ def process_base(p: processing.StableDiffusionProcessing):
             output = SimpleNamespace(images=output)
         if isinstance(output, Image.Image):
             output = SimpleNamespace(images=[output])
+        if not hasattr(output, 'frames') and hasattr(output, 'videos'):
+            output.frames = output.videos # modular video pipelines emit videos, not frames
         if hasattr(output, 'image'):
             output.images = output.image
         if hasattr(output, 'images'):
@@ -202,10 +204,7 @@ def process_base(p: processing.StableDiffusionProcessing):
             t1 = time.time()
             log.debug(f'Profile: pipeline call: {t1-t0:.2f}')
         if not hasattr(output, 'images') and hasattr(output, 'frames'):
-            if hasattr(output.frames[0], 'shape'):
-                log.debug(f'Generated: frames={output.frames[0].shape[1]}')
-            else:
-                log.debug(f'Generated: frames={len(output.frames[0])}')
+            log.debug(f'Generated: frames={len(output.frames[0])}')
             output.images = output.frames[0]
         if hasattr(output, 'images') and isinstance(output.images, np.ndarray):
             output.images = torch.from_numpy(output.images)
@@ -218,8 +217,7 @@ def process_base(p: processing.StableDiffusionProcessing):
             if isinstance(v, torch.Tensor):
                 err_args[k] = f'{v.device}:{v.dtype}:{v.shape}'
         log.error(f'Processing: args={err_args} {e}')
-        if shared.cmd_opts.debug:
-            errors.display(e, 'Processing')
+        errors.display(e, 'Processing')
     except RuntimeError as e:
         shared.state.interrupted = True
         err_args = base_args.copy()
@@ -235,6 +233,9 @@ def process_base(p: processing.StableDiffusionProcessing):
     if hasattr(shared.sd_model, 'postprocess') and callable(shared.sd_model.postprocess):
         output = shared.sd_model.postprocess(p, output)
 
+    if hasattr(shared.sd_model, 'sdnext_phaseid'):
+        shared.state.end(shared.sd_model.sdnext_phaseid)
+        shared.sd_model.sdnext_phaseid = None
     shared.state.end(jobid)
     shared.state.nextjob()
     return output
@@ -297,7 +298,7 @@ def process_hires(p: processing.StableDiffusionProcessing, output):
                 output.images = processing_vae.vae_decode(latents=output.images, model=shared.sd_model, vae_type=p.vae_type, output_type='pil', width=p.width, height=p.height)
             if p.is_control and hasattr(p, 'task_args') and p.task_args.get('image', None) is not None:
                 if hasattr(shared.sd_model, "vae") and output.images is not None and len(output.images) > 0:
-                    output.images = processing_vae.vae_decode(latents=output.images, model=shared.sd_model, vae_type=p.vae_type, output_type='pil', width=p.hr_upscale_to_x, height=p.hr_upscale_to_y) # controlnet cannnot deal with latent input
+                    output.images = processing_vae.vae_decode(latents=output.images, model=shared.sd_model, vae_type=p.vae_type, output_type='pil', width=p.hr_upscale_to_x, height=p.hr_upscale_to_y) # controlnet cannot deal with latent input
             update_sampler(p, shared.sd_model, second_pass=True)
             orig_denoise = p.denoising_strength
             p.denoising_strength = strength
@@ -312,7 +313,7 @@ def process_hires(p: processing.StableDiffusionProcessing, output):
                 prompts, p.network_data = extra_networks.parse_prompts(prompts)
                 reset_prompts = True
             if reset_prompts or ('base' in p.skip):
-                extra_networks.activate(p)
+                extra_networks.activate_filtered(p)
 
             hires_args = set_pipeline_args(
                 p=p,
@@ -323,8 +324,9 @@ def process_hires(p: processing.StableDiffusionProcessing, output):
                 negative_prompts_2=len(output.images) * [p.refiner_negative] if len(p.refiner_negative) > 0 else p.negative_prompts,
                 num_inference_steps=calculate_hires_steps(p),
                 eta=sched_eta,
-                guidance_scale=p.image_cfg_scale if p.image_cfg_scale is not None else p.cfg_scale,
-                guidance_rescale=p.diffusers_guidance_rescale,
+                guidance_scale=p.cfg_image if p.cfg_image is not None and p.cfg_image > -1 else p.cfg_scale,
+                guidance_rescale=p.cfg_rescale if p.cfg_rescale is not None and p.cfg_rescale > -1 else None,
+                true_cfg_scale=p.cfg_true if p.cfg_true is not None and p.cfg_true > -1 else None,
                 output_type=output_type,
                 clip_skip=p.clip_skip,
                 image=output.images,
@@ -373,20 +375,11 @@ def process_refine(p: processing.StableDiffusionProcessing, output):
     if is_refiner_enabled(p):
         if shared.opts.samples_save and not p.do_not_save_samples and shared.opts.save_images_before_refiner and hasattr(shared.sd_model, 'vae'):
             save_intermediate(p, latents=output.images, suffix="-before-refiner")
-        if shared.opts.diffusers_move_base:
-            log.debug('Moving to CPU: model=base')
-            sd_models.move_model(shared.sd_model, devices.cpu)
         if shared.state.interrupted or shared.state.skipped:
             shared.sd_model = orig_pipeline
             return output
         jobid = shared.state.begin('Refine')
         shared.sd_model = sd_models.apply_balanced_offload(shared.sd_model)
-        if shared.opts.diffusers_move_refiner:
-            sd_models.move_model(shared.sd_refiner, devices.device)
-            if hasattr(shared.sd_refiner, 'unet'):
-                sd_models.move_model(shared.sd_model.unet, devices.device)
-            if hasattr(shared.sd_refiner, 'transformer'):
-                sd_models.move_model(shared.sd_model.transformer, devices.device)
         p.ops.append('refine')
         p.is_refiner_pass = True
 
@@ -411,8 +404,9 @@ def process_refine(p: processing.StableDiffusionProcessing, output):
                 num_inference_steps=calculate_refiner_steps(p),
                 eta=sched_eta,
                 noise_level=noise_level, # StableDiffusionUpscalePipeline only
-                guidance_scale=p.image_cfg_scale if p.image_cfg_scale is not None else p.cfg_scale,
-                guidance_rescale=p.diffusers_guidance_rescale,
+                guidance_scale=p.cfg_image if p.cfg_image is not None and p.cfg_image > -1 else p.cfg_scale,
+                guidance_rescale=p.cfg_rescale if p.cfg_rescale is not None and p.cfg_rescale > -1 else None,
+                true_cfg_scale=p.cfg_true if p.cfg_true is not None and p.cfg_true > -1 else None,
                 denoising_start=p.refiner_start if p.refiner_start > 0 and p.refiner_start < 1 else None,
                 denoising_end=1 if p.refiner_start > 0 and p.refiner_start < 1 else None,
                 image=image,
@@ -442,9 +436,6 @@ def process_refine(p: processing.StableDiffusionProcessing, output):
 
         if shared.opts.diffusers_offload_mode == "balanced":
             shared.sd_refiner = sd_models.apply_balanced_offload(shared.sd_refiner)
-        elif shared.opts.diffusers_move_refiner:
-            log.debug('Moving to CPU: model=refiner')
-            sd_models.move_model(shared.sd_refiner, devices.cpu)
         shared.state.end(jobid)
         shared.state.nextjob()
         p.is_refiner_pass = False
@@ -473,10 +464,15 @@ def process_decode(p: processing.StableDiffusionProcessing, output):
             log.debug(f'Generated: bytes={len(output.bytes)}')
             return output
         audio = getattr(output, 'audio', None)
+        if audio is not None:
+            p.audio_sampling_rate = getattr(output, 'sampling_rate', None)
         if not hasattr(output, 'images') and hasattr(output, 'frames'):
             log.debug(f'Generated: frames={len(output.frames[0])}')
             output.images = output.frames[0]
+        if getattr(p, 'video_still', False) and hasattr(output, 'images') and output.images is not None:
+            output.images = output.images[:1] # only the first frame derives from real latents; the rest decode from padding
         if output.images is not None and len(output.images) > 0 and isinstance(output.images[0], Image.Image):
+            sd_models.offload_ondemand(shared.sd_model) # in-pipe decode paths return materialized frames; the vae seam in processing_vae never runs
             return attach_audio(output.images, audio)
         model = shared.sd_model if not is_refiner_enabled(p) else shared.sd_refiner
         if not hasattr(model, 'vae'):
@@ -533,6 +529,13 @@ def update_pipeline(sd_model, p: processing.StableDiffusionProcessing):
         log.warning('Processing: op=update model not loaded')
         return None
     updated_model = sd_model
+    if 'MiniMaxH3' in sd_model.__class__.__name__ and not isinstance(p, processing.StableDiffusionProcessingVideo):
+        # image tabs run the model in still mode; the video tab applies its own overrides
+        from modules.video_models import video_minimax
+        video_minimax.apply_overrides(p, sd_model, still=True, audio=False)
+        if getattr(p, 'detailer_enabled', False):
+            log.warning(f'Processing: cls={sd_model.__class__.__name__} detailer not supported')
+            p.detailer_enabled = False
     if sd_models.get_diffusers_task(sd_model) == sd_models.DiffusersTaskType.INPAINTING and getattr(p, 'image_mask', None) is None and p.task_args.get('image_mask', None) is None and getattr(p, 'mask', None) is None:
         log.warning('Processing: mode=inpaint mask=None')
         updated_model = sd_models.set_diffuser_pipe(sd_model, sd_models.DiffusersTaskType.IMAGE_2_IMAGE)
@@ -542,29 +545,28 @@ def update_pipeline(sd_model, p: processing.StableDiffusionProcessing):
         updated_model = preprocess_onnx_pipeline(p)
         global orig_pipeline # pylint: disable=global-statement
         orig_pipeline = updated_model # processed ONNX pipeline should not be replaced with original pipeline.
-    if getattr(updated_model, "current_attn_name", None) != shared.opts.cross_attention_optimization:
+    current_attn = getattr(updated_model, "current_attn_name", None)
+    if (current_attn != shared.opts.cross_attention_optimization) and (current_attn != shared.opts.sdp_overrides):
         log.info(f"Setting attention optimization: {shared.opts.cross_attention_optimization}")
         attention.set_diffusers_attention(updated_model)
     return updated_model
 
 
 def validate_pipeline(p: processing.StableDiffusionProcessing):
-    from modules.video_models.models_def import models as video_models
-    models_cls = []
-    for family in video_models:
-        for m in video_models[family]:
-            if m.repo_cls is not None:
-                models_cls.append(m.repo_cls.__name__)
-            if m.custom is not None:
-                models_cls.append(m.custom)
-    is_video_model = shared.sd_model.__class__.__name__ in models_cls
-    override_video_pipelines = ['WanPipeline', 'WanImageToVideoPipeline', 'WanVACEPipeline']
+    from modules.video_models import models_def
+    is_video_model = shared.sd_model.__class__.__name__ in models_def.pipeline_classes()
+    override_video_pipelines = ['WanPipeline', 'WanImageToVideoPipeline', 'WanVACEPipeline', 'MiniMaxH3ModularPipeline']
     is_video_pipeline = ('video' in p.__class__.__name__.lower()) or (shared.sd_model.__class__.__name__ in override_video_pipelines)
     if is_video_model and not is_video_pipeline:
         log.error(f'Mismatch: type={shared.sd_model_type} cls={shared.sd_model.__class__.__name__} request={p.__class__.__name__} video model with non-video pipeline')
         return False
     elif not is_video_model and is_video_pipeline:
         log.error(f'Mismatch: type={shared.sd_model_type} cls={shared.sd_model.__class__.__name__} request={p.__class__.__name__} non-video model with video pipeline')
+        return False
+    if getattr(shared.sd_model, 'sdnext_video_workflow', None) == 'ref2va' and p.task_args.get('references', None) is None:
+        # the reference workflow loads its own transformer partition alone: without references the pipeline
+        # dispatches to the keyframe path and reaches a transformer that was never loaded
+        log.error(f'Mismatch: type={shared.sd_model_type} cls={shared.sd_model.__class__.__name__} request={p.__class__.__name__} reference workflow requires reference images: use the video tab or the video api')
         return False
     return True
 
@@ -612,6 +614,7 @@ def process_diffusers(p: processing.StableDiffusionProcessing):
     if hasattr(p, 'dummy'):
         images = [Image.new(mode='RGB', size=(p.width, p.height))]
         return images
+
     if 'base' not in p.skip:
         output = process_base(p)
     else:

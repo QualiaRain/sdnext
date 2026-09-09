@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from PIL import Image
-from installer import install, reload
+from installer import install
 from modules.logger import log
 
 
@@ -35,7 +35,7 @@ def google_requirements():
     # reload('pydantic', '2.11.7')
 
 
-def get_size_buckets(width: int, height: int) -> str:
+def get_size_buckets(width: int, height: int) -> tuple[str, str]:
     aspect_ratio = width / height
     closest_aspect_ratio = min(aspect_ratios_buckets.items(), key=lambda x: abs(x[1] - aspect_ratio))[0]
     pixel_count = width * height
@@ -60,7 +60,7 @@ class GoogleVeoVideoPipeline:
         )
 
     def img2vid(self, prompt, image):
-        from google import genai
+        from google import genai # pylint: disable=no-name-in-module
         image_bytes = io.BytesIO()
         image.save(image_bytes, format='JPEG')
         return self.client.models.generate_videos(
@@ -111,7 +111,7 @@ class GoogleVeoVideoPipeline:
         return args
 
     def __call__(self, prompt: list[str], width: int, height: int, image: Image.Image = None, num_frames: int = 4*24):
-        from google import genai
+        from google import genai # pylint: disable=no-name-in-module
 
         if isinstance(prompt, list) and len(prompt) > 0:
             prompt = prompt[0]

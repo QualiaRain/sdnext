@@ -6,7 +6,6 @@ __pycache__
 .idea/
 **/.DS_Store
 /*.json
-/*.yaml
 /params.txt
 /styles.csv
 /user.css
@@ -18,8 +17,9 @@ __pycache__
 /data/themes.json
 /data/installer.json
 /data/rocm.json
+/data/signatures.json
+/data/civitai.json
 node_modules
-pnpm-lock.yaml
 package-lock.json
 
 # all models and temp files
@@ -50,6 +50,7 @@ package-lock.json
 /outputs/**/*
 /models/**/*
 /tmp
+/benchmarks
 .*/
 cache
 tunableop_results*.csv
@@ -60,6 +61,8 @@ tunableop_results*.csv
 !package.json
 !requirements.txt
 !constraints.txt
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
 !/data
 !/models/VAE-approx
 !/models/VAE-approx/model.pt

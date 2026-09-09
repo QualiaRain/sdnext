@@ -67,10 +67,16 @@ class FlashFlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
     def __init__(
             self,
             num_train_timesteps: int = 1000,
+            beta_start: float = 0.00085,
+            beta_end: float = 0.012,
+            beta_schedule: str = "linear",
             shift: float = 1.0,
             use_dynamic_shifting=False,
             prediction_type: str = "flow_prediction",
             use_flow_sigmas: bool = True,
+            rescale_betas_zero_snr: bool = False,
+            timestep_spacing: str = "linspace",
+            steps_offset: int = 0,
             base_shift: Optional[float] = 0.5,
             max_shift: Optional[float] = 1.15,
             base_image_seq_len: Optional[int] = 256,
@@ -238,7 +244,10 @@ class FlashFlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
             timesteps = sigmas * self.config.num_train_timesteps
             sigmas = torch.cat([sigmas, torch.ones(1, device=sigmas.device)])
         else:
-            sigmas = torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])
+            if sigmas[-1].abs() < 1e-8:
+                sigmas = sigmas
+            else:
+                sigmas = torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])
 
         self.timesteps = timesteps.to(device=device)
         self.sigmas = sigmas
@@ -351,15 +360,19 @@ class FlashFlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         if self.step_index < self.num_inference_steps - 1:
             sigma_next = self.sigmas[self.step_index + 1]
-            noise = randn_tensor(
-                model_output.shape,
-                generator=generator,
-                device=model_output.device,
-                dtype=denoised.dtype,
-            )
-            if noise_clip_std > 0.0:
-                noise = noise.clamp(-noise_clip_std, noise_clip_std)
-            sample = sigma_next * s_noise * noise + (1.0 - sigma_next) * denoised
+            at_final_sigma = sigma_next.abs() < 1e-8
+            if at_final_sigma:
+                sample = denoised
+            else:
+                noise = randn_tensor(
+                    model_output.shape,
+                    generator=generator,
+                    device=model_output.device,
+                    dtype=denoised.dtype,
+                )
+                if noise_clip_std > 0.0:
+                    noise = noise.clamp(-noise_clip_std, noise_clip_std)
+                sample = sigma_next * s_noise * noise + (1.0 - sigma_next) * denoised
 
         self._step_index += 1
         sample = sample.to(model_output.dtype)

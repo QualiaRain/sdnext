@@ -5,14 +5,15 @@ from modules.logger import log
 
 
 class PostprocessedImage:
-    def __init__(self, image, info = None):
+    def __init__(self, image = None, video = None, info = None):
         if info is None:
             info = {}
         self.image = image
+        self.video = video
         self.info = info
 
     def __str__(self):
-        return f'PostprocessedImage(image={self.image} info={self.info})'
+        return f'PostprocessedImage(image={self.image} video={self.video} info={self.info})'
 
 
 class ScriptPostprocessing:
@@ -134,7 +135,7 @@ class ScriptPostprocessingRunner:
             with gr.Blocks(analytics_enabled=False):
                 self.setup_ui()
         scripts = self.scripts_in_preferred_order()
-        args = [None] * max([x.args_to for x in scripts])
+        args = [None] * max([x.args_to for x in scripts], default=0)
         for script in scripts:
             script_args_dict = scripts_args.get(script.name, None)
             if script_args_dict is not None:
@@ -160,6 +161,6 @@ class ScriptPostprocessingRunner:
             else:
                 for (name, _component), value in zip(script.controls.items(), script_args, strict=False):
                     process_kwargs[name] = value
-            log.debug(f'Postprocess: script={script.name} args={process_args} kwargs={process_kwargs}')
+            log.debug(f'Postprocess: script="{script.name}" args={process_args} kwargs={process_kwargs}')
             script.postprocess(filenames, *process_args, **process_kwargs)
             shared.state.end(jobid)

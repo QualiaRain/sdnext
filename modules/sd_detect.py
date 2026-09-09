@@ -1,8 +1,7 @@
 import os
 import time
-import torch
 import diffusers
-from modules import shared, shared_items, devices, errors, model_tools
+from modules import shared, shared_items, errors, model_tools
 from modules.logger import log
 
 
@@ -54,35 +53,35 @@ def guess_by_name(fn, current_guess):
     elif 'hunyuandit' in fn.lower():
         new_guess = 'HunyuanDiT'
     elif 'pixart-xl' in fn.lower():
-        new_guess = 'PixArt Alpha'
+        new_guess = 'PixArtAlpha'
     elif 'stable-diffusion-3' in fn.lower():
         new_guess = 'Stable Diffusion 3'
     elif 'stable-cascade' in fn.lower() or 'stablecascade' in fn.lower() or 'wuerstchen3' in fn.lower() or ('sotediffusion' in fn.lower() and "v2" in fn.lower()):
-        if devices.dtype == torch.float16:
-            log.warning('Stable Cascade does not support Float16')
         new_guess = 'Stable Cascade'
     elif 'pixart-sigma' in fn.lower():
-        new_guess = 'PixArt Sigma'
+        new_guess = 'PixArtSigma'
     elif 'sana' in fn.lower():
         new_guess = 'Sana'
     elif 'lumina-next' in fn.lower():
-        new_guess = 'Lumina-Next'
+        new_guess = 'LuminaNext'
     elif 'lumina-dimoo' in fn.lower():
-        new_guess = 'Lumina-DiMOO'
+        new_guess = 'LuminaDiMOO'
     elif 'lumina-image-2' in fn.lower():
-        new_guess = 'Lumina 2'
+        new_guess = 'Lumina2'
     elif 'kolors' in fn.lower():
         new_guess = 'Kolors'
     elif 'auraflow' in fn.lower() or 'pony-v7' in fn.lower():
         new_guess = 'AuraFlow'
     elif 'cogview3' in fn.lower():
-        new_guess = 'CogView 3'
+        new_guess = 'CogView3'
     elif 'cogview4' in fn.lower():
-        new_guess = 'CogView 4'
+        new_guess = 'CogView4'
     elif 'meissonic' in fn.lower():
         new_guess = 'Meissonic'
     elif 'omnigen2' in fn.lower():
         new_guess = 'OmniGen2'
+    elif 'boogu' in fn.lower():
+        new_guess = 'Boogu'
     elif 'omnigen' in fn.lower():
         new_guess = 'OmniGen'
     elif 'sd3' in fn.lower():
@@ -91,16 +90,16 @@ def guess_by_name(fn, current_guess):
         new_guess = 'HiDreamO1'
     elif 'hidream' in fn.lower():
         new_guess = 'HiDream'
-    elif 'hidream' in fn.lower():
-        new_guess = 'HiDream'
     elif 'zeta-chroma' in fn.lower() or 'zetachroma' in fn.lower():
         new_guess = 'ZetaChroma'
     elif 'chroma' in fn.lower() and 'xl' not in fn.lower():
         new_guess = 'Chroma'
-    elif 'flux.2' in fn.lower() and 'klein' in fn.lower():
-        new_guess = 'FLUX2 Klein'
+    elif ('flux.2' in fn.lower() or 'f2' in fn.lower()) and 'klein' in fn.lower():
+        new_guess = 'FLUX2Klein'
     elif 'flux.2' in fn.lower():
         new_guess = 'FLUX2'
+    elif 'lens' in fn.lower():
+        new_guess = 'Lens'
     elif 'ultraflux' in fn.lower():
         new_guess = 'UltraFlux'
     elif 'flux' in fn.lower() or 'flex.1' in fn.lower():
@@ -116,6 +115,8 @@ def guess_by_name(fn, current_guess):
         new_guess = 'Cosmos'
     elif 'f-lite' in fn.lower():
         new_guess = 'FLite'
+    elif 'minimax' in fn.lower():
+        new_guess = 'MiniMaxH3'
     elif 'wan' in fn.lower():
         new_guess = 'WanAI'
     if 'chronoedit' in fn.lower():
@@ -127,104 +128,131 @@ def guess_by_name(fn, current_guess):
     elif 'nextstep' in fn.lower():
         new_guess = 'NextStep'
     elif 'kandinsky-2-1' in fn.lower():
-        new_guess = 'Kandinsky 2.1'
+        new_guess = 'Kandinsky21'
     elif 'kandinsky-2-2' in fn.lower():
-        new_guess = 'Kandinsky 2.2'
+        new_guess = 'Kandinsky22'
     elif 'kandinsky-3' in fn.lower():
-        new_guess = 'Kandinsky 3.0'
+        new_guess = 'Kandinsky30'
     elif 'kandinsky-5.0' in fn.lower():
-        new_guess = 'Kandinsky 5.0'
+        new_guess = 'Kandinsky50'
     elif 'hunyuanimage3' in fn.lower() or 'hunyuanimage-3' in fn.lower():
         new_guess = 'HunyuanImage3'
     elif 'hunyuanimage' in fn.lower():
         new_guess = 'HunyuanImage'
     elif 'x-omni' in fn.lower():
-        new_guess = 'X-Omni'
+        new_guess = 'XOmni'
     elif 'sdxl-turbo' in fn.lower() or 'stable-diffusion-xl' in fn.lower():
         new_guess = 'Stable Diffusion XL'
     elif 'stable-video-diffusion' in fn.lower():
         new_guess = 'StableVideoDiffusion'
+    elif 'prx-pixel' in fn.lower() or 'prxpixel' in fn.lower():
+        new_guess = 'PRXPixel'
     elif 'prx-' in fn.lower():
         new_guess = 'PRX'
     elif 'gemini-' in fn.lower() and 'image' in fn.lower():
         new_guess = 'NanoBanana'
     elif 'ernie-image' in fn.lower():
-        new_guess = 'ERNIE-Image'
+        new_guess = 'ERNIEImage'
     elif 'nucleus-image' in fn.lower() or 'nucleusmoe-image' in fn.lower():
-        new_guess = 'Nucleus-Image'
-    elif 'z-image' in fn.lower() or 'z_image' in fn.lower():
-        new_guess = 'Z-Image'
+        new_guess = 'NucleusImage'
+    elif 'z-image' in fn.lower() or 'z_image' in fn.lower() or 'zimage' in fn.lower():
+        new_guess = 'ZImage'
+    elif 'krea-2' in fn.lower() or 'krea2' in fn.lower():
+        new_guess = 'Krea2'
+    elif 'ideogram' in fn.lower():
+        new_guess = 'Ideogram4'
     elif 'longcat-image' in fn.lower():
         new_guess = 'LongCat'
     elif 'ovis-image' in fn.lower():
-        new_guess = 'Ovis-Image'
+        new_guess = 'OvisImage'
     elif 'glm-image' in fn.lower():
-        new_guess = 'GLM-Image'
+        new_guess = 'GLMImage'
     elif 'sdxs-1b' in fn.lower():
         new_guess = 'SDXS'
     elif 'step1x-edit' in fn.lower():
-        new_guess = 'Step1X-Edit'
+        new_guess = 'Step1XEdit'
     elif 'vibe-image-edit' in fn.lower():
         new_guess = 'VIBE'
     elif 'joyai-image-edit' in fn.lower() or 'joy-image-edit' in fn.lower():
-        new_guess = 'Joy'
+        new_guess = 'JoyEdit'
+    elif 'sefi-image' in fn.lower():
+        new_guess = 'SeFi'
+    elif 'mage-flow' in fn.lower():
+        new_guess = 'MageFlow'
     if debug_load:
         log.trace(f'Autodetect: method=name file="{fn}" previous="{current_guess}" current="{new_guess}"')
     return new_guess or current_guess
 
 
-def guess_by_diffusers(fn, current_guess):
+def get_model_index(name: str):
+    repo_id = name.removeprefix('Diffusers/')
+    fn = None
+    try:
+        from huggingface_hub import hf_hub_download
+        fn = hf_hub_download(repo_id, filename='model_index.json', cache_dir=shared.opts.diffusers_dir)
+        log.debug(f'Autodetect model: repo="{repo_id}" index="{fn}"')
+        return fn
+    except Exception:
+        pass
+    return fn
+
+def guess_by_model_index(fn: str, name: str, current_guess: str):
     exclude_by_name = ['ostris/Flex.2-preview', 'Owen777/UltraFlux-v1', './pretrain/FLUX.1-dev'] # pipeline may be misleading
-    if not os.path.isdir(fn):
-        return current_guess, None
+
     index = os.path.join(fn, 'model_index.json')
-    if os.path.exists(index) and os.path.isfile(index):
-        index = shared.readfile(index, silent=True, as_type="dict")
-        name = index.get('_name_or_path', None)
-        if debug_load:
-            log.trace(f'Autodetect: method=diffusers file="{fn}" name="{name}"')
-        if (name is not None) and (name in exclude_by_name):
-            return current_guess, None
-        cls = index.get('_class_name', None)
-        if isinstance(cls, list):
-            cls = cls[-1]
-        if cls is not None:
-            pipeline = getattr(diffusers, cls, None)
-            if pipeline is None:
-                pipeline = cls
-        if callable(pipeline):
-            is_quant = False
-            for folder in os.listdir(fn):
-                folder = os.path.join(fn, folder)
-                if is_quant:
-                    break
-                if folder.endswith('quantization_config.json'):
+    if (index is None) or (not os.path.exists(index)) or (not os.path.isfile(index)):
+        if name is not None and name.startswith('Diffusers/'):
+            index = get_model_index(name)
+    if (index is None) or (not os.path.exists(index)) or (not os.path.isfile(index)):
+        return current_guess, None
+
+    index = shared.readfile(index, silent=True, as_type="dict")
+    name = index.get('_name_or_path', None)
+    if debug_load:
+        log.trace(f'Autodetect: method=diffusers file="{fn}" name="{name}"')
+    if (name is not None) and (name in exclude_by_name):
+        return current_guess, None
+    cls = index.get('_class_name', None)
+    if isinstance(cls, list):
+        cls = cls[-1]
+    pipeline = None
+    if cls is not None:
+        pipeline = getattr(diffusers, cls, None)
+        if pipeline is None:
+            pipeline = cls
+    if callable(pipeline):
+        is_quant = False
+        for folder in os.listdir(fn):
+            folder = os.path.join(fn, folder)
+            if is_quant:
+                break
+            if folder.endswith('quantization_config.json'):
+                is_quant = True
+                break
+            if folder.endswith('config.json'):
+                quantization_config = shared.readfile(folder, silent=True, as_type="dict").get("quantization_config", None)
+                if quantization_config is not None:
                     is_quant = True
                     break
-                if folder.endswith('config.json'):
-                    quantization_config = shared.readfile(folder, silent=True, as_type="dict").get("quantization_config", None)
-                    if quantization_config is not None:
+            if os.path.isdir(folder):
+                for f in os.listdir(folder):
+                    f = os.path.join(folder, f)
+                    if f.endswith('quantization_config.json'):
                         is_quant = True
                         break
-                if os.path.isdir(folder):
-                    for f in os.listdir(folder):
-                        f = os.path.join(folder, f)
-                        if f.endswith('quantization_config.json'):
+                    if f.endswith('config.json'):
+                        quantization_config = shared.readfile(f, silent=True, as_type="dict").get("quantization_config", None)
+                        if quantization_config is not None:
                             is_quant = True
                             break
-                        if f.endswith('config.json'):
-                            quantization_config = shared.readfile(f, silent=True, as_type="dict").get("quantization_config", None)
-                            if quantization_config is not None:
-                                is_quant = True
-                                break
-            pipelines = shared_items.get_pipelines()
-            for k, v in pipelines.items():
-                if v is not None and v.__name__ == pipeline.__name__:
-                    if is_quant:
-                        k = f'{k} SDNQ'
-                    if debug_load:
-                        log.trace(f'Autodetect: method=diffusers file="{fn}" previous="{current_guess}" current="{k}"')
-                    return k, v
+        pipelines = shared_items.get_pipelines()
+        for k, v in pipelines.items():
+            if v is not None and v.__name__ == pipeline.__name__:
+                if is_quant:
+                    k = f'{k} SDNQ'
+                if debug_load:
+                    log.trace(f'Autodetect: method=diffusers file="{fn}" previous="{current_guess}" current="{k}"')
+                return k, v
     return current_guess, None
 
 
@@ -245,24 +273,35 @@ def guess_variant(fn, current_guess):
     return new_guess or current_guess
 
 
-def detect_pipeline(f: str, op: str = 'model'):
+def detect_pipeline(ckpt, op: str = 'model'):
+    if isinstance(ckpt, str):
+        f = ckpt
+        name = None
+    else:
+        f = ckpt.path
+        name = ckpt.name
     guess = shared.opts.diffusers_pipeline
     pipeline = None
     if guess == 'Autodetect':
         try:
             guess = 'Stable Diffusion XL' if ('XL' in f.upper() or 'SDNQ' in f.upper()) else 'Stable Diffusion' # set default guess
+
             guess = guess_by_size(f, guess)
             if debug_load:
                 log.trace(f'Autodetect: type=size guess="{guess}" file="{f}"')
+
             guess = guess_by_name(f, guess)
             if debug_load:
                 log.trace(f'Autodetect: type=name guess="{guess}" file="{f}"')
-            guess, pipeline = guess_by_diffusers(f, guess)
+
+            guess, pipeline = guess_by_model_index(f, name=name, current_guess=guess)
             if debug_load:
                 log.trace(f'Autodetect: type=diffusers guess="{guess}" file="{f}"')
+
             guess = guess_variant(f, guess)
             if debug_load:
                 log.trace(f'Autodetect: type=variant guess="{guess}" file="{f}"')
+
             pipeline = shared_items.get_pipelines().get(guess, None) if pipeline is None else pipeline
             log.info(f'Autodetect {op}: detect="{guess}" class={getattr(pipeline, "__name__", None)} file="{f}"')
             if debug_load is not None:

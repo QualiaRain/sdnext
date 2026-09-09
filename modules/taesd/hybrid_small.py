@@ -62,7 +62,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752) paper.
         force_upcast (`bool`, *optional*, default to `True`):
             If enabled it will force the VAE to run in float32 for high image resolution pipelines, such as SD-XL. VAE
-            can be fine-tuned / trained to a lower range without loosing too much precision in which case
+            can be fine-tuned / trained to a lower range without losing too much precision in which case
             `force_upcast` can be set to `False` - see: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix
     """
 
@@ -253,7 +253,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     @apply_forward_hook
     def encode(
         self, x: torch.FloatTensor, return_dict: bool = True
-    ) -> AutoencoderKLOutput | tuple[DiagonalGaussianDistribution]:
+    ) -> AutoencoderKLOutput | tuple[DiagonalGaussianDistribution] | tuple[torch.Tensor]:
         """
         Encode a batch of images into latents.
 
@@ -283,7 +283,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         return AutoencoderKLOutput(latent_dist=posterior)
 
-    def _decode(self, z: torch.FloatTensor, return_dict: bool = True) -> DecoderOutput | torch.FloatTensor:
+    def _decode(self, z: torch.FloatTensor, return_dict: bool = True) -> DecoderOutput | tuple[torch.Tensor] | torch.Tensor:
         if self.use_tiling and (z.shape[-1] > self.tile_latent_min_size or z.shape[-2] > self.tile_latent_min_size):
             return self.tiled_decode(z, return_dict=return_dict)
 
@@ -298,7 +298,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
     @apply_forward_hook
     def decode(
         self, z: torch.FloatTensor, return_dict: bool = True, generator=None
-    ) -> DecoderOutput | torch.FloatTensor:
+    ) -> DecoderOutput | tuple[torch.Tensor] | torch.Tensor:
         """
         Decode a batch of images.
 
@@ -336,7 +336,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             b[:, :, :, x] = a[:, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, x] * (x / blend_extent)
         return b
 
-    def tiled_encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
+    def tiled_encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput | tuple[DiagonalGaussianDistribution] | tuple[torch.Tensor]:
         r"""Encode a batch of images using a tiled encoder.
 
         When this option is enabled, the VAE will split the input tensor into tiles to compute encoding in several
@@ -390,7 +390,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         return AutoencoderKLOutput(latent_dist=posterior)
 
-    def tiled_decode(self, z: torch.FloatTensor, return_dict: bool = True) -> DecoderOutput | torch.FloatTensor:
+    def tiled_decode(self, z: torch.FloatTensor, return_dict: bool = True) -> DecoderOutput | tuple[torch.Tensor] | torch.Tensor:
         r"""
         Decode a batch of images using a tiled decoder.
 
@@ -444,7 +444,7 @@ class AutoencoderSmall(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         sample_posterior: bool = False,
         return_dict: bool = True,
         generator: torch.Generator | None = None,
-    ) -> DecoderOutput | torch.FloatTensor:
+    ) -> DecoderOutput | tuple[torch.Tensor] | torch.Tensor:
         r"""
         Args:
             sample (`torch.FloatTensor`): Input sample.

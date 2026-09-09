@@ -20,6 +20,8 @@ class NetworkModuleLora(network.NetworkModule):
         self.down_model = self.create_module(weights.w, "lora_down.weight")
         self.mid_model = self.create_module(weights.w, "lora_mid.weight", none_ok=True)
         self.dim = weights.w["lora_down.weight"].shape[0]
+        # Optional bias delta (diff_b) applied as ex_bias alongside the weight update.
+        self.ex_bias = weights.w.get("diff_b")
 
     def create_module(self, weights, key, none_ok=False):
         weight = weights.get(key)
@@ -28,21 +30,26 @@ class NetworkModuleLora(network.NetworkModule):
         linear_modules = [torch.nn.Linear, torch.nn.modules.linear.NonDynamicallyQuantizableLinear, torch.nn.MultiheadAttention, diffusers_lora.LoRACompatibleLinear]
         typ = type(self.sd_module)
         is_linear = typ in linear_modules or self.sd_module.__class__.__name__ in ["SDNQLinear", "QLinear", "Linear4bit"]
+        # Embedding weight delta is up@down over the [vocab, dim] table, same shape and merge
+        # as a Linear. isinstance also catches the SDNQEmbedding / ScaledWordEmbedding subclasses.
+        is_embedding = isinstance(self.sd_module, torch.nn.Embedding)
         is_conv = (typ in [torch.nn.Conv2d, diffusers_lora.LoRACompatibleConv]) or (self.sd_module.__class__.__name__ in ["SDNQConv2d", "QConv2d"]) or (typ.__name__ in ['downsampler_block', 'upsampler_block'])
-        if is_linear:
+        # skip_init: the stored weight is copied over the whole parameter below, so the
+        # default random init is thrown away. It costs ~4x the copy on every module.
+        if is_linear or is_embedding:
             weight = weight.reshape(weight.shape[0], -1)
-            module = torch.nn.Linear(weight.shape[1], weight.shape[0], bias=False)
+            module = torch.nn.utils.skip_init(torch.nn.Linear, weight.shape[1], weight.shape[0], bias=False)
         elif is_conv and (key == "lora_down.weight" or key == "dyn_up"):
             if len(weight.shape) == 2:
                 weight = weight.reshape(weight.shape[0], -1, 1, 1)
             if weight.shape[2] != 1 or weight.shape[3] != 1:
-                module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
+                module = torch.nn.utils.skip_init(torch.nn.Conv2d, weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
             else:
-                module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
+                module = torch.nn.utils.skip_init(torch.nn.Conv2d, weight.shape[1], weight.shape[0], (1, 1), bias=False)
         elif is_conv and (key == "lora_mid.weight"):
-            module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
+            module = torch.nn.utils.skip_init(torch.nn.Conv2d, weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
         elif is_conv and (key == "lora_up.weight" or key == "dyn_down"):
-            module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
+            module = torch.nn.utils.skip_init(torch.nn.Conv2d, weight.shape[1], weight.shape[0], (1, 1), bias=False)
         else:
             raise AssertionError(f'Lora unsupported: key={key} layer={self.network_key} type={typ.__name__}')
         with torch.no_grad():
@@ -66,8 +73,9 @@ class NetworkModuleLora(network.NetworkModule):
             if len(down.shape) == 4:
                 output_shape += down.shape[2:]
             updown = lyco_helpers.rebuild_conventional(up, down, output_shape, self.network.dyn_dim)
+        ex_bias = self.ex_bias.to(target.device, dtype=target_dtype) if self.ex_bias is not None else None
         del up, down, mid
-        return self.finalize_updown(updown, target, output_shape)
+        return self.finalize_updown(updown, target, output_shape, ex_bias=ex_bias)
 
     def forward(self, x, y):
         self.up_model.to(device=devices.device)

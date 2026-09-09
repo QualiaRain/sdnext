@@ -167,7 +167,7 @@ class Matrix(torch.nn.Module):
         if column_indices.dtype == torch.int16:
             if size[0] > max_dim or size[1] > max_dim:
                 raise ValueError(
-                    "Sparse matrix with shape {size} exceeds representable "
+                    f"Sparse matrix with shape {size} exceeds representable "
                     "size with 16-bit indices.")
 
     def validate(self):
@@ -462,7 +462,7 @@ def triton_dds(
         fuse_srgb: bool = False,
         clamp_output: bool = False,
         output_mt: bool = False,
-        output_slice: None | Tuple[int,int] = None
+        output_slice: Tuple[int, int] | None = None
     ):
     assert isinstance(lhs, torch.Tensor)
     assert isinstance(rhs, Matrix)
@@ -616,7 +616,7 @@ def triton_dds_sbsc(
         fuse_srgb: bool = False,
         clamp_output: bool = False,
         output_mt: bool = False,
-        output_slice: None | Tuple[int,int] = None
+        output_slice: Tuple[int, int] | None = None
     ):
     assert isinstance(lhs, torch.Tensor)
     assert isinstance(rhs, SBSCMatrix)
@@ -776,7 +776,7 @@ def triton_dds_zerorhs_sbsc(
         gamma_correction: str = 'fast',
         clamp_output: bool = False,
         output_mt: bool = False,
-        output_slice: None | Tuple[int,int] = None
+        output_slice: Tuple[int, int] | None = None
     ):
     assert isinstance(lhs, torch.Tensor)
 

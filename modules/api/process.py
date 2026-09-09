@@ -20,12 +20,17 @@ class ResPreprocess(BaseModel):
     model: str = Field(default='', title="Model", description="The processor model used")
     image: str = Field(default='', title="Image", description="The processed image in base64 format")
 
+
 class ReqMask(BaseModel):
     image: str = Field(title="Image", description="The base64 encoded image")
     type: str = Field(title="Mask type", description="Type of masking image to return")
-    mask: str | None = Field(title="Mask", description="If optional maks image is not provided auto-masking will be performed")
+    mask: str | None = Field(title="Mask", description="If optional mask image is not provided auto-masking will be performed")
     model: str | None = Field(title="Model", description="The model to use for preprocessing")
     params: dict | None = Field(default={}, title="Settings", description="Preprocessor settings")
+
+class ResMask(BaseModel):
+    mask: str = Field(default='', title="Image", description="The processed image in base64 format")
+
 
 class ReqFace(BaseModel):
     image: str = Field(title="Image", description="The base64 encoded image")
@@ -38,8 +43,6 @@ class ResFace(BaseModel):
     images: list[str] = Field(title="Image", description="The base64 encoded images of detected faces")
     scores: list[float] = Field(title="Scores", description="The scores of the detected faces")
 
-class ResMask(BaseModel):
-    mask: str = Field(default='', title="Image", description="The processed image in base64 format")
 
 class ItemPreprocess(BaseModel):
     name: str = Field(title="Name", description="Preprocessor name")
@@ -76,7 +79,7 @@ class APIProcess:
         if processor is None or processor.processor_id != req.model:
             with self.queue_lock:
                 processor = processors.Processor(req.model)
-        for k, v in req.params.items():
+        for k, v in (req.params or {}).items():
             if k not in processors.config[processor.processor_id]['params']:
                 return JSONResponse(status_code=400, content={"error": f"Processor invalid parameter: id={req.model} {k}={v}"})
         jobid = shared.state.begin('API-PRE', api=True)
@@ -102,7 +105,7 @@ class APIProcess:
             return JSONResponse(status_code=400, content={"error": f"Mask type not found: id={req.type}"})
         image = decode_base64_to_image(req.image)
         mask = decode_base64_to_image(req.mask) if req.mask else None
-        for k, v in req.params.items():
+        for k, v in (req.params or {}).items():
             if not hasattr(masking.opts, k):
                 return JSONResponse(status_code=400, content={"error": f"Mask invalid parameter: {k}={v}"})
             else:
@@ -118,7 +121,6 @@ class APIProcess:
 
     def post_detect(self, req: ReqFace):
         """Detect faces/objects in an image using YOLO. Returns bounding boxes, labels, scores, and cropped images."""
-        from modules.shared import yolo # pylint: disable=no-name-in-module
         image = decode_base64_to_image(req.image)
         jobid = shared.state.begin('API-FACE', api=True)
         images = []
@@ -127,7 +129,7 @@ class APIProcess:
         boxes = []
         labels = []
         with self.queue_lock:
-            items = yolo.predict(req.model, image)
+            items = shared.detailer.predict(req.model, req.model, image)
             for item in items:
                 images.append(encode_pil_to_base64(item.item))
                 scores.append(item.score)
@@ -137,51 +139,120 @@ class APIProcess:
         shared.state.end(jobid, api=False)
         return ResFace(classes=classes, labels=labels, scores=scores, boxes=boxes, images=images)
 
+    def post_detail(self, req: models.ReqDetail):
+        """Run the YOLO detailer on a single image as a standalone operation; no base generation pass.
+
+        Per-request fields override shared.opts.detailer_* via detailer_opt(p, attr) precedence
+        in modules/postprocess/yolo.py. Fields left as None fall through to the global setting.
+        """
+        import numpy as np
+        from PIL import Image
+
+        if shared.sd_model is None or not hasattr(shared.sd_model, 'sd_checkpoint_info'):
+            return JSONResponse(status_code=400, content={"error": "no base model selected"})
+        image = decode_base64_to_image(req.image)
+        if image is None:
+            return JSONResponse(status_code=400, content={"error": "invalid image"})
+
+        # Per-request overrides for the non-primary detailer fields; None values fall through to opts
+        # via detailer_opt(p, attr) -> shared.opts.<attr>.
+        overrides = {attr: getattr(req, attr) for attr in (
+            'detailer_models', 'detailer_classes', 'detailer_conf',
+            'detailer_iou', 'detailer_max', 'detailer_min_size',
+            'detailer_max_size', 'detailer_blur', 'detailer_padding',
+            'detailer_segmentation', 'detailer_merge', 'detailer_sort',
+            'detailer_sigma_adjust', 'detailer_sigma_adjust_max',
+            'detailer_include_detections',
+        ) if getattr(req, attr, None) is not None}
+
+        # Sampler block: request field names differ from the p attributes they set, so map explicitly.
+        # schedulers_* become per-job overrides (need a named sampler to take effect); cfg/sampler apply directly.
+        for req_attr, p_attr in (
+            ('detailer_sampler', 'hr_sampler_name'),
+            ('detailer_prediction', 'schedulers_prediction_type'),
+            ('detailer_shift', 'schedulers_shift'),
+            ('detailer_cfg_scale', 'cfg_scale'),
+            ('detailer_loworder', 'schedulers_use_loworder'),
+            ('detailer_thresholding', 'schedulers_use_thresholding'),
+            ('detailer_dynamic', 'schedulers_dynamic_shift'),
+            ('detailer_rescale', 'schedulers_rescale_betas'),
+        ):
+            val = getattr(req, req_attr, None)
+            if val is not None:
+                overrides[p_attr] = val
+
+        jobid = shared.state.begin('API-DETAIL', api=True)
+        try:
+            p = shared.detailer.make_processing(
+                image,
+                prompt=req.detailer_prompt or '',
+                negative=req.detailer_negative or '',
+                steps=req.detailer_steps if req.detailer_steps is not None else 10,
+                strength=req.detailer_strength if req.detailer_strength is not None else 0.3,
+                resolution=req.detailer_resolution if req.detailer_resolution is not None else 1024,
+                seed=req.seed if req.seed is not None else -1,
+                classes=req.detailer_classes if req.detailer_classes is not None else None,
+                overrides=overrides,
+            )
+
+            with self.queue_lock:
+                result = shared.detailer.restore(np.array(image), p)
+
+            annotated_b64 = None
+            if isinstance(result, list) and len(result) > 0:
+                out_image = Image.fromarray(result[0])
+                if len(result) > 1 and result[1] is not None:
+                    annotated = result[1] if isinstance(result[1], Image.Image) else Image.fromarray(result[1])
+                    annotated_b64 = encode_pil_to_base64(annotated)
+            elif isinstance(result, np.ndarray):
+                out_image = Image.fromarray(result)
+            else:
+                return JSONResponse(status_code=500, content={"error": "detailer produced no result"})
+
+            return models.ResDetail(image=encode_pil_to_base64(out_image), detections=annotated_b64, seed=p.all_seeds[0])
+        finally:
+            shared.state.end(jobid, api=False)
+
     def post_prompt_enhance(self, req: models.ReqPromptEnhance):
         """Enhance a prompt using an LLM. Supports text, image-conditioned, and video prompt enhancement modes."""
         from modules import processing_helpers
         seed = req.seed or -1
         seed = processing_helpers.get_fixed_seed(seed)
         prompt = ''
-        if req.type in ('text', 'image'):
-            from modules.scripts_manager import scripts_txt2img
-            default_model = 'google/gemma-3-4b-it' if req.type == 'image' else 'google/gemma-3-1b-it'
-            model = default_model if req.model is None or len(req.model) < 4 else req.model
-            instance = [s for s in scripts_txt2img.scripts if 'prompt_enhance.py' in s.filename][0]
-            prompt = instance.enhance(
-                model=model,
-                prompt=req.prompt,
-                system=req.system_prompt,
-                prefix=req.prefix,
-                suffix=req.suffix,
-                sample=req.do_sample,
-                tokens=req.max_tokens,
-                temperature=req.temperature,
-                penalty=req.repetition_penalty,
-                top_k=req.top_k,
-                top_p=req.top_p,
-                thinking=req.thinking,
-                keep_thinking=req.keep_thinking,
-                use_vision=req.use_vision,
-                prefill=req.prefill or '',
-                keep_prefill=req.keep_prefill,
-                image=decode_base64_to_image(req.image) if req.image else None,
-                seed=seed,
-                nsfw=req.nsfw,
-            )
-        elif req.type == 'video':
-            from modules.ui_video_vlm import enhance_prompt
-            model = 'Google Gemma 3 4B' if req.model is None or len(req.model) < 4 else req.model
-            prompt = enhance_prompt(
-                enable=True,
-                image=decode_base64_to_image(req.image),
-                prompt=req.prompt,
-                model=model,
-                system_prompt=req.system_prompt,
-                nsfw=req.nsfw,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="prompt enhancement: invalid type")
+        from modules.scripts_manager import scripts_control
+        default_model = 'google/gemma-3-4b-it' if req.type == 'image' else 'google/gemma-3-1b-it'
+        model = default_model if req.model is None or len(req.model) < 4 else req.model
+        instance = [s for s in scripts_control.scripts if 'prompt_enhance_ext.py' in s.filename]
+        if len(instance) == 0:
+            raise HTTPException(status_code=500, detail="Prompt enhancement script not found")
+        instance = instance[0]
+        prompt = instance.enhance(
+            model=model,
+            prompt=req.prompt,
+            system=req.system_prompt,
+            prefix=req.prefix,
+            suffix=req.suffix,
+            sample=req.do_sample,
+            min_tokens=req.min_tokens,
+            max_tokens=req.max_tokens,
+            temperature=req.temperature,
+            penalty=req.repetition_penalty,
+            top_k=req.top_k,
+            top_p=req.top_p,
+            thinking=req.thinking,
+            keep_thinking=req.keep_thinking,
+            use_vision=req.use_vision,
+            prefill=req.prefill or '',
+            keep_prefill=req.keep_prefill,
+            image=decode_base64_to_image(req.image) if req.image else None,
+            seed=seed,
+            nsfw=req.nsfw,
+            custom_args=req.custom_args,
+            process_words=req.process_words,
+            semantic_threshold=req.semantic_threshold,
+            embedding_similarity=req.embedding_similarity,
+            use_openai=req.use_openai
+        )
         res = models.ResPromptEnhance(prompt=prompt, seed=seed)
         return res
 
@@ -204,23 +275,34 @@ class APIProcess:
 
     def set_upscalers(self, req: dict):
         reqDict = vars(req)
+        script_args = reqDict.pop('script_args', None)
         reqDict['extras_upscaler_1'] = reqDict.pop('upscaler_1', None)
         reqDict['extras_upscaler_2'] = reqDict.pop('upscaler_2', None)
-        return reqDict
+        return reqDict, script_args
 
     def extras_single_image_api(self, req: models.ReqProcessImage):
         """Upscale or postprocess a single image using the configured upscaler pipeline."""
-        reqDict = self.set_upscalers(req)
+        reqDict, script_args = self.set_upscalers(req)
         reqDict['image'] = helpers.decode_base64_to_image(reqDict['image'])
         with self.queue_lock:
-            result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", save_output=False, **reqDict)
-        return models.ResProcessImage(image=helpers.encode_pil_to_base64(result[0][0]), html_info=result[1])
+            result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", video="", save_output=False, script_args=script_args, **reqDict)
+        if len(result) != 4:
+            raise HTTPException(status_code=500, detail="Invalid processing response")
+        outputs, _video, info, _params = result
+        if outputs is None or len(outputs) == 0:
+            raise HTTPException(status_code=500, detail="Invalid processing response")
+        return models.ResProcessImage(image=helpers.encode_pil_to_base64(outputs[0]), html_info=info)
 
     def extras_batch_images_api(self, req: models.ReqProcessBatch):
         """Upscale or postprocess a batch of images using the configured upscaler pipeline."""
-        reqDict = self.set_upscalers(req)
+        reqDict, script_args = self.set_upscalers(req)
         image_list = reqDict.pop('imageList', [])
         image_folder = [helpers.decode_base64_to_image(x.data) for x in image_list]
         with self.queue_lock:
-            result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
-        return models.ResProcessBatch(images=list(map(helpers.encode_pil_to_base64, result[0])), html_info=result[1])
+            result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", video="", save_output=False, script_args=script_args, **reqDict)
+        if len(result) != 4:
+            raise HTTPException(status_code=500, detail="Invalid processing response")
+        outputs, _video, info, _params = result
+        if outputs is None or len(outputs) == 0:
+            raise HTTPException(status_code=500, detail="Invalid processing response")
+        return models.ResProcessBatch(images=list(map(helpers.encode_pil_to_base64, outputs)), html_info=info)

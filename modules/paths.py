@@ -25,7 +25,11 @@ except Exception:
 
 temp_dir = config.get('temp_dir', '')
 if len(temp_dir) == 0:
-    temp_dir = tempfile.gettempdir()
+    os_env = os.environ.get('GRADIO_TEMP_DIR', '')
+    if len(os_env) > 0:
+        temp_dir = os_env
+    else:
+        temp_dir = tempfile.gettempdir()
 reference_path = os.path.join('models', 'Reference')
 modules_path = os.path.dirname(os.path.realpath(__file__))
 script_path = os.path.dirname(modules_path)
@@ -33,6 +37,8 @@ data_path = cli.data_dir
 models_config = cli.models_dir or config.get('models_dir') or 'models'
 models_path = models_config if os.path.isabs(models_config) else os.path.join(data_path, models_config)
 params_path = os.environ.get('SD_PATH_PARAMS', os.path.join(data_path, "params.txt"))
+probe_cache_file = os.path.join(data_path, "data", "signatures.json")
+civitai_probe_file = os.path.join(data_path, "data", "civitai.json")
 extensions_dir = cli.extensions_dir or os.path.join(data_path, "extensions")
 extensions_builtin_dir = "extensions-builtin"
 sd_configs_path = os.path.join(script_path, "configs")
@@ -116,25 +122,30 @@ def create_paths(opts):
     create_path(fix_path('embeddings_dir'))
     create_path(fix_path('onnx_temp_dir'))
     create_path(fix_path('outdir_samples'))
-    create_path(fix_path('outdir_txt2img_samples'))
-    create_path(fix_path('outdir_img2img_samples'))
-    create_path(fix_path('outdir_control_samples'))
-    create_path(fix_path('outdir_extras_samples'))
-    create_path(fix_path('outdir_init_images'))
     create_path(fix_path('outdir_grids'))
-    create_path(fix_path('outdir_txt2img_grids'))
-    create_path(fix_path('outdir_img2img_grids'))
-    create_path(fix_path('outdir_control_grids'))
-    create_path(fix_path('outdir_save'))
-    create_path(fix_path('outdir_video'))
+    # per-type output dirs resolve against data_path via fix_path(), so create them bare
+    # only when no base folder is set; with a base configured, the resolved base+specific
+    # paths below are the real targets and the bare versions would just litter data_path
+    base_samples = opts.data.get('outdir_samples', '')
+    base_grids = opts.data.get('outdir_grids', '')
+    if not base_samples:
+        create_path(fix_path('outdir_txt2img_samples'))
+        create_path(fix_path('outdir_img2img_samples'))
+        create_path(fix_path('outdir_control_samples'))
+        create_path(fix_path('outdir_extras_samples'))
+        create_path(fix_path('outdir_init_images'))
+        create_path(fix_path('outdir_save'))
+        create_path(fix_path('outdir_video'))
+    if not base_grids:
+        create_path(fix_path('outdir_txt2img_grids'))
+        create_path(fix_path('outdir_img2img_grids'))
+        create_path(fix_path('outdir_control_grids'))
     create_path(fix_path('styles_dir'))
     create_path(fix_path('yolo_dir'))
     create_path(fix_path('wildcards_dir'))
     create_path(fix_path('autocomplete_dir'))
 
     # Create resolved output paths (base + specific)
-    base_samples = opts.data.get('outdir_samples', '')
-    base_grids = opts.data.get('outdir_grids', '')
     if base_samples:
         create_path(resolve_output_path(base_samples, opts.data.get('outdir_txt2img_samples', '')))
         create_path(resolve_output_path(base_samples, opts.data.get('outdir_img2img_samples', '')))

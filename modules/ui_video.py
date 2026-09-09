@@ -1,6 +1,6 @@
 import os
 import gradio as gr
-from modules import shared, timer, images, ui_common, ui_sections, generation_parameters_copypaste
+from modules import shared, timer, images, ui_common, ui_sections, generation_parameters_copypaste, scripts_manager
 from modules.logger import log
 
 
@@ -9,6 +9,10 @@ debug = log.trace if os.environ.get('SD_VIDEO_DEBUG', None) is not None else lam
 
 def create_ui():
     log.debug('UI initialize: tab=video')
+
+    scripts_manager.scripts_current = scripts_manager.scripts_video
+    scripts_manager.scripts_video.initialize_scripts(is_img2img=False, is_control=False, is_video=True)
+
     with gr.Blocks(analytics_enabled=False) as _video_interface:
         prompt, styles, negative, generate_btn, _reprocess, paste, networks_button, _token_counter, _token_button, _token_counter_negative, _token_button_negative = ui_sections.create_toprow(
             is_img2img=False,
@@ -30,29 +34,52 @@ def create_ui():
                 overrides = ui_common.create_override_inputs('video')
                 with gr.Tab('Output', id='video-outputs-tab') as _video_outputs_tab:
                     from modules.video_models import video_ui
-                    mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt, mp4_video, mp4_frames, mp4_sf = video_ui.create_ui_outputs()
-                with gr.Tab('Generic', id='video-core-tab') as video_core_tab:
+                    mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt, mp4_video, mp4_frames, mp4_sf, mp4_thumb, mp4_scale, mp4_upscaler = video_ui.create_ui_outputs()
+                with gr.Tab('Extras', id='video-extras-tab', elem_id='video_extras') as _video_extras_tab:
+                    video_script_inputs = scripts_manager.scripts_video.setup_ui(parent='video', accordion=True)
+                with gr.Tab('Models', id='video-core-tab') as video_core_tab:
                     from modules.video_models import video_ui
                     engine, model, steps, sampler_index, width, height, frames, seed = video_ui.create_ui(
-                        prompt, negative, styles, overrides,
-                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt, mp4_video, mp4_frames, mp4_sf,
+                        prompt, negative, styles,
+                        overrides, video_script_inputs,
+                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt,
+                        mp4_video, mp4_frames, mp4_sf, mp4_thumb,
+                        mp4_scale, mp4_upscaler,
+                    )
+                with gr.Tab('MiniMax', id='minimax-tab') as minimax_tab:
+                    from modules.minimax import minimax_ui
+                    minimax_ui.create_ui(
+                        prompt, negative, styles,
+                        overrides, video_script_inputs,
+                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt,
+                        mp4_video, mp4_frames, mp4_sf, mp4_thumb,
+                        mp4_scale, mp4_upscaler,
+                    )
+
+                with gr.Tab('LTXVideo', id='ltx-tab') as ltx_tab:
+                    from modules.ltx import ltx_ui
+                    ltx_ui.create_ui(
+                        prompt, negative, styles,
+                        overrides, video_script_inputs,
+                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt,
+                        mp4_video, mp4_frames, mp4_sf, mp4_thumb,
+                        mp4_scale, mp4_upscaler,
                     )
                 with gr.Tab('FramePack', id='framepack-tab') as framepack_tab:
                     from modules.framepack import framepack_ui
                     framepack_ui.create_ui(
-                        prompt, negative, styles, overrides,
-                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt, mp4_video, mp4_frames, mp4_sf,
-                    )
-                with gr.Tab('LTX', id='ltx-tab') as ltx_tab:
-                    from modules.ltx import ltx_ui
-                    ltx_ui.create_ui(
-                        prompt, negative, styles, overrides,
-                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt, mp4_video, mp4_frames, mp4_sf,
+                        prompt, negative, styles,
+                        overrides, video_script_inputs,
+                        mp4_fps, mp4_interpolate, mp4_codec, mp4_ext, mp4_opt,
+                        mp4_video, mp4_frames, mp4_sf, mp4_thumb,
+                        mp4_scale, mp4_upscaler,
                     )
 
         paste_fields = [
             (prompt, "Prompt"), # cannot add more fields as they are not defined yet
             (negative, "Negative prompt"),
+            (prompt, "Template"), # override prompt with template if available
+            (negative, "Negative template"),
             (width, "Width"),
             (height, "Height"),
             (frames, "Frames"),
@@ -69,9 +96,8 @@ def create_ui():
 
         current_tab = gr.Textbox(visible=False, value='video')
         video_core_tab.select(fn=lambda: 'video', inputs=[], outputs=[current_tab])
-        framepack_tab.select(fn=lambda: 'framepack', inputs=[], outputs=[current_tab])
+        minimax_tab.select(fn=lambda: 'minimax', inputs=[], outputs=[current_tab])
         ltx_tab.select(fn=lambda: 'ltx', inputs=[], outputs=[current_tab])
+        framepack_tab.select(fn=lambda: 'framepack', inputs=[], outputs=[current_tab])
 
         generate_btn.click(fn=None, _js='submit_video_wrapper', inputs=[current_tab], outputs=[])
-
-        # from framepack_api import create_api # pylint: disable=wrong-import-order

@@ -61,7 +61,7 @@ def process(
         policy=False,
         banned=False,
         metadata=True,
-        copy=False, # pylint: disable=unused-argument # compatability
+        copy=False, # pylint: disable=unused-argument # compatibility
         score=0.2,
         blocks=3,
         censor=[],
@@ -136,9 +136,10 @@ def process(
 
 
 # defines script for dual-mode usage
+# see below for all available options and callbacks
+# <https://github.com/vladmandic/automatic/blob/master/modules/scripts.py>
 class ScriptNudeNet(scripts.Script):
-    # see below for all available options and callbacks
-    # <https://github.com/vladmandic/automatic/blob/master/modules/scripts.py#L26>
+    video_capable = scripts.AlwaysVisible
 
     def title(self):
         return 'NudeNet'

@@ -1,8 +1,10 @@
 # VQA Detection Utilities
 # Parsing, formatting, and drawing functions for detection results (points, bboxes, gaze)
 
+import os
 from PIL import Image, ImageDraw, ImageFont
 from modules import shared
+from modules.paths import script_path
 
 
 def parse_points(result) -> list:
@@ -286,7 +288,7 @@ def calculate_eye_position(face_bbox: dict) -> tuple:
     return (eye_x, eye_y)
 
 
-def draw_bounding_boxes(image: Image.Image, detections: list, points: list | None = None) -> Image.Image:
+def draw_bounding_boxes(image: Image.Image, detections: list, points: list | None = None) -> Image.Image | None:
     """
     Draw bounding boxes and/or points on an image.
 
@@ -311,7 +313,7 @@ def draw_bounding_boxes(image: Image.Image, detections: list, points: list | Non
     # Try to load a font, fall back to default if unavailable
     try:
         font_size = max(12, int(min(width, height) * 0.02))
-        font_path = shared.opts.font or "javascript/notosans-nerdfont-regular.ttf"
+        font_path = shared.opts.font or os.path.join(script_path, "ui", "fonts", "notosans-nerdfont-regular.ttf")
         font = ImageFont.truetype(font_path, size=font_size)
     except Exception:
         font = ImageFont.load_default()

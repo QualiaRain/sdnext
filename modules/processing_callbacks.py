@@ -55,10 +55,15 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
     if kwargs is None:
         kwargs = {}
     t0 = time.time()
-    if devices.backend == "ipex":
-        torch.xpu.synchronize(devices.device)
-    elif devices.backend in {"cuda", "zluda", "rocm"}:
-        torch.cuda.synchronize(devices.device)
+
+    if shared.opts.torch_sync:
+        if devices.backend == "ipex":
+            torch.xpu.synchronize(devices.device)
+        elif devices.backend in {"cuda", "zluda", "rocm"}:
+            torch.cuda.synchronize(devices.device)
+        time.sleep(0.001) # 1ms yield frees GIL for the preview thread
+
+    t1 = time.time()
 
     if shared.state.paused:
         log.debug('Sampling paused')
@@ -78,18 +83,15 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
 
     latents = kwargs.get('latents', None)
     if debug:
-        debug_callback(f'Callback: step={step} timestep={timestep} latents={latents.shape if latents is not None else None} kwargs={list(kwargs)}')
+        debug_callback(f'Callback: step={step} timestep={timestep} latents={latents.shape if latents is not None else None} sync={shared.opts.torch_sync} kwargs={list(kwargs)}')
     if shared.state.sampling_steps == 0 and getattr(pipe, 'num_timesteps', 0) > 0:
         shared.state.sampling_steps = pipe.num_timesteps
     shared.state.step()
     if shared.state.interrupted or shared.state.skipped:
         raise AssertionError('Interrupted...')
-    if latents is None:
+    if latents is None or p is None:
         return kwargs
-    elif shared.opts.nan_skip:
-        assert not torch.isnan(latents[..., 0, 0]).all(), f'NaN detected at step {step}: Skipping...'
-    if p is None:
-        return kwargs
+
     if len(getattr(p, 'ip_adapter_names', [])) > 0 and p.ip_adapter_names[0] != 'None':
         ip_adapter_scales = list(p.ip_adapter_scales)
         ip_adapter_starts = list(p.ip_adapter_starts)
@@ -113,11 +115,12 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
     cfg_end = getattr(p, "cfg_end", 1.0) or 1.0
     total_steps = getattr(pipe, "num_timesteps", 0)
     target_step = int(total_steps * cfg_end) if total_steps else 0
+
     if (cfg_end < 1.0) and not getattr(pipe, "_cfg_end_applied", False) and (step >= target_step):
         pipe._cfg_end_applied = True # pylint: disable=protected-access
         if "PAG" in shared.sd_model.__class__.__name__:
             pipe._guidance_scale = 1.001 if pipe._guidance_scale > 1 else pipe._guidance_scale  # pylint: disable=protected-access
-            pipe._pag_scale = 0.001  # pylint: disable=protected-access
+            pipe._cfg_true = 0.001  # pylint: disable=protected-access
         else:
             pipe._guidance_scale = 0.0  # pylint: disable=protected-access
             for key in ["prompt_embeds", "negative_prompt_embeds", "add_text_embeds", "add_time_ids"]:
@@ -136,11 +139,18 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
             else:
                 width = getattr(p, 'width', 1024)
                 height = getattr(p, 'height', 1024)
-            shared.state.current_latent = pipe._unpack_latents(kwargs['latents'], height, width, pipe.vae_scale_factor) # pylint: disable=protected-access
-            if current_noise_pred is not None:
-                shared.state.current_noise_pred = pipe._unpack_latents(current_noise_pred, height, width, pipe.vae_scale_factor) # pylint: disable=protected-access
-            else:
-                shared.state.current_noise_pred = current_noise_pred
+            try:
+                shared.state.current_latent = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor) # pylint: disable=protected-access
+                if current_noise_pred is not None:
+                    shared.state.current_noise_pred = pipe._unpack_latents(current_noise_pred, height, width, pipe.vae_scale_factor) # pylint: disable=protected-access
+                else:
+                    shared.state.current_noise_pred = current_noise_pred
+            except Exception:
+                shared.state.current_latent = pipe._unpack_latents(latents, height, width) # pylint: disable=protected-access # pythoning ask-for-forgiveness if method does not support vae_scale_factor
+                if current_noise_pred is not None:
+                    shared.state.current_noise_pred = pipe._unpack_latents(current_noise_pred, height, width) # pylint: disable=protected-access # pythoning ask-for-forgiveness if method does not support vae_scale_factor
+                else:
+                    shared.state.current_noise_pred = current_noise_pred
         elif hasattr(pipe, "_unpatchify_latents"): # FLUX.2 - unpack [B, seq, patch_ch] to [B, ch, H, W]
             vae_scale = getattr(pipe, 'vae_scale_factor', 8)
             if p.hr_resize_mode > 0 and (p.hr_upscaler != 'None' or p.hr_resize_mode == 5) and p.is_hr_pass:
@@ -149,7 +159,6 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
             else:
                 width = getattr(p, 'width', 1024)
                 height = getattr(p, 'height', 1024)
-            latents = kwargs['latents']
             if len(latents.shape) == 4:
                 latents = pipe._unpatchify_latents(latents) # [B, C*4, h/2, w/2] -> [B, C, h, w] # pylint: disable=protected-access
             elif len(latents.shape) == 3:  # packed format [B, seq_len, patch_channels]
@@ -173,8 +182,27 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
                 current_noise_pred = current_noise_pred.view(b, h_patches, w_patches, channels, 2, 2)
                 current_noise_pred = current_noise_pred.permute(0, 3, 1, 4, 2, 5).reshape(b, channels, h_patches * 2, w_patches * 2)
             shared.state.current_noise_pred = current_noise_pred
+        elif 'Ideogram4' in pipe.__class__.__name__:  # packed normalized [B, seq, 128] -> Flux.2 latent space for TAE FLUX.2
+            if latents.ndim == 3:
+                b, seq_len, packed_ch = latents.shape
+                vae_scale = getattr(pipe, 'vae_scale_factor', 8)
+                patch = getattr(pipe, 'patch_size', 2)
+                grid_h = getattr(p, 'height', 1024) // (vae_scale * patch)
+                grid_w = getattr(p, 'width', 1024) // (vae_scale * patch)
+                if grid_h * grid_w != seq_len:  # fallback to square assumption
+                    grid_h = grid_w = int(seq_len ** 0.5)
+                bn = pipe.vae.bn
+                mean = bn.running_mean.view(1, 1, -1).to(device=latents.device, dtype=torch.float32)
+                std = torch.sqrt(bn.running_var + pipe.vae.config.batch_norm_eps).view(1, 1, -1).to(device=latents.device, dtype=torch.float32)
+                z = latents.float() * std + mean
+                ae_ch = packed_ch // (patch * patch)
+                z = z.view(b, grid_h, grid_w, patch, patch, ae_ch).permute(0, 5, 1, 3, 2, 4).reshape(b, ae_ch, grid_h * patch, grid_w * patch)
+                shared.state.current_latent = z
+            else:
+                shared.state.current_latent = latents
+            shared.state.current_noise_pred = current_noise_pred
         else:
-            shared.state.current_latent = kwargs['latents']
+            shared.state.current_latent = latents
             shared.state.current_noise_pred = current_noise_pred
 
         # Video latent preview: extract middle frame from 5D [B,C,T,H,W] to 4D [B,C,H,W]
@@ -200,6 +228,7 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
                     p.extra_generation_params["Sigma adjust"] = _sigma_adjust
             except Exception:
                 pass
+
     except Exception as e:
         global warned # pylint: disable=global-statement
         if not warned:
@@ -209,6 +238,8 @@ def diffusers_callback(pipe, step: int = 0, timestep: int = 0, kwargs: dict | No
         # errors.display(e, 'Callback')
     if shared.cmd_opts.profile and shared.profiler is not None:
         shared.profiler.step()
-    t1 = time.time()
-    timer.process.add('callback', t1 - t0)
+
+    t2 = time.time()
+    timer.process.add('sync', t1 - t0)
+    timer.process.add('callback', t2 - t1)
     return kwargs

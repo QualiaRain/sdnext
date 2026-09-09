@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import shlex
+import shutil
 import subprocess
 
 import installer
@@ -61,7 +62,8 @@ def get_custom_args():
         current = getattr(args, arg)
         if current != default:
             custom[arg] = getattr(args, arg)
-    log.info(f'Command line args: {sys.argv[1:]} {installer.print_dict(custom)}')
+    log.info(f'Command line args: {sys.argv[1:]}')
+    log.info(f'Command line parsed: {installer.print_dict(custom)}')
     if os.environ.get('SD_ENV_DEBUG', None) is not None:
         env = os.environ.copy()
         if 'PATH' in env:
@@ -153,13 +155,12 @@ def run_extension_installer(ext_dir): # compatibility function
 
 
 def get_memory_stats(detailed:bool=False):
-    from modules.memstats import ram_stats, memory_stats
+    from modules.memstats import ram_stats, memory_stats, model_stats
     if not detailed:
         res = ram_stats()
         return f'{res["used"]}/{res["total"]}'
     else:
-        res = memory_stats()
-        return res
+        return { **memory_stats(), 'model': model_stats(as_gb=True) } # fresh dict: memory_stats returns a module global that the per-generation log also prints
 
 
 def clean_server():
@@ -194,8 +195,8 @@ def clean_server():
 def start_server(immediate=True, server=None):
     if args.profile:
         import cProfile
-        pr = cProfile.Profile()
-        pr.enable()
+        profiler = cProfile.Profile()
+        profiler.enable()
     import gc
     import importlib.util
     collected = 0
@@ -213,19 +214,21 @@ def start_server(immediate=True, server=None):
 
     uvicorn = None
     if args.test:
-        log.info("Test only")
-        log.critical('Logging: level=critical')
-        log.error('Logging: level=error')
-        log.warning('Logging: level=warning')
-        log.info('Logging: level=info')
-        log.debug('Logging: level=debug')
-        log.trace('Logging: level=trace')
+        from pipelines.generic_test import test_pipelines
+        test_pipelines()
+        # log.info("Console test: \033[31m ANSI color red \033[0m")
+        # log.info("Console test: \033[34m ANSI color blue \033[0m")
+        # log.info("Console test: \033[33m ANSI color yellow \033[0m")
+        log.info("Test only: exiting...")
         server.wants_restart = False
+        uvicorn = server.webui(restart=not immediate, _exit=True)
     else:
-        uvicorn = server.webui(restart=not immediate)
+        uvicorn = server.webui(restart=not immediate, profiler=profiler if args.profile else None)
     if args.profile:
-        pr.disable()
-        installer.print_profile(pr, 'WebUI')
+        profiler.disable()
+        installer.print_profile(profiler, 'WebUI')
+        profiler.clear()
+        profiler.enable()
     rec('server')
     return uvicorn, server
 
@@ -253,9 +256,9 @@ def main():
     installer.check_version()
     installer.check_venv()
     log.info(f'Args: {sys.argv[1:]}')
-    if not args.skip_env and not args.skip_all:
+    if not args.skip_env:
         installer.set_environment()
-    if args.uv:
+    if args.uv and shutil.which('uv') is None:
         installer.install('uv', 'uv')
     installer.install_gradio()
     installer.check_torch()
@@ -344,10 +347,12 @@ def main():
             if uv is not None and uv.wants_restart:
                 clean_server()
                 log.info('Server restarting...')
-                # uv, instance = start_server(immediate=False, server=instance)
                 os.execv(sys.executable, ['python'] + sys.argv)
             else:
                 log.info('Exiting...')
+                from modules import errors
+                errors.profile_stop()
+                errors.profile_print('Shutdown')
                 break
         time.sleep(1.0)
 

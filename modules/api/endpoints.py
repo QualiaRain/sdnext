@@ -1,4 +1,5 @@
 from fastapi.exceptions import HTTPException
+from fastapi.responses import Response
 from modules import shared
 from modules.logger import log
 from modules.api import models, helpers
@@ -14,9 +15,9 @@ def _format_tags(raw_tags):
 
 def get_samplers():
     from modules import sd_samplers_diffusers
-    all_samplers = []
+    all_samplers = [{'name': 'Default', 'options': {}}] # restores the model's own scheduler; first to match the ui dropdown order
     for k, v in sd_samplers_diffusers.config.items():
-        if k in ['All', 'Default', 'Res4Lyf']:
+        if k in ['All', 'Default', 'Res4Lyf']: # remaining keys are shared config templates, not samplers
             continue
         all_samplers.append({'name': k, 'options': v})
     return all_samplers
@@ -59,8 +60,8 @@ def get_controlnets(model_type: str | None = None):
 
 def get_detailers():
     """List available detailer (YOLO) models for face/object detection and inpainting."""
-    shared.yolo.enumerate()
-    return [{"name": k, "path": v} for k, v in shared.yolo.list.items()]
+    shared.detailer.enumerate()
+    return [{"name": k, "path": v} for k, v in shared.detailer.list.items()]
 
 get_restorers = get_detailers  # legacy alias for /sdapi/v1/face-restorers
 
@@ -209,14 +210,21 @@ def get_schedulers():
     """List all available schedulers with their class names and options."""
     from modules.sd_samplers import list_samplers
     all_schedulers = list_samplers()
-    return all_schedulers
+    return [
+        {
+            'name': scheduler.name,
+            'cls': scheduler.constructor.__name__ if scheduler.constructor is not None else None,
+            'options': scheduler.options,
+        }
+        for scheduler in all_schedulers
+    ]
 
 def post_unload_checkpoint():
     """Unload the current model and refiner from memory to free VRAM."""
     from modules import sd_models
     sd_models.unload_model_weights(op='model')
     sd_models.unload_model_weights(op='refiner')
-    return {}
+    return Response(status_code=204)
 
 def post_reload_checkpoint(force:bool=False):
     """Reload the selected checkpoint. Set ``force=True`` to unload first and do a clean reload."""
@@ -224,18 +232,19 @@ def post_reload_checkpoint(force:bool=False):
     if force:
         sd_models.unload_model_weights(op='model')
     sd_models.reload_model_weights()
-    return {}
+    return Response(status_code=204)
 
 def post_lock_checkpoint(lock:bool=False):
     """Lock or unlock the current model to prevent automatic model swaps."""
     from modules import modeldata
     modeldata.model_data.locked = lock
-    return {}
+    return Response(status_code=204)
 
 def post_refresh_unets():
     """Rescan UNet directories and update the available UNet list."""
     import modules.sd_unet
-    return modules.sd_unet.refresh_unet_list()
+    modules.sd_unet.refresh_unet_list()
+    return Response(status_code=204)
 
 def get_checkpoint():
     """Return information about the currently loaded checkpoint including type, class, title, and hash."""
@@ -273,12 +282,12 @@ def set_checkpoint(sd_model_checkpoint: str, dtype: str | None = None, force: bo
 def post_refresh_checkpoints():
     """Rescan checkpoint directories and update the available models list."""
     shared.refresh_checkpoints()
-    return {}
+    return Response(status_code=204)
 
 def post_refresh_vae():
     """Rescan VAE directories and update the available VAE list."""
     shared.refresh_vaes()
-    return {}
+    return Response(status_code=204)
 
 def get_modules():
     """Analyze the loaded model and return its sub-module breakdown with device, dtype, and parameter info."""
@@ -329,6 +338,8 @@ def get_file(file: str):
     import os
     from pathlib import Path
     from starlette.responses import FileResponse
+    if shared.demo is None:
+        raise HTTPException(status_code=503, detail="server not ready")
     allowed_dirs = shared.demo.allowed_paths
     if not file.strip():
         raise HTTPException(status_code=400, detail="file path is required")
@@ -343,6 +354,8 @@ def get_file(file: str):
 def get_deletefile(file: str):
     import os
     from pathlib import Path
+    if shared.demo is None:
+        raise HTTPException(status_code=503, detail="server not ready")
     allowed_dirs = shared.demo.allowed_paths
     if file is None or len(file.strip()) == 0:
         raise HTTPException(status_code=400, detail="file path is required")
@@ -366,6 +379,8 @@ def get_deletefile(file: str):
 def get_deleteimage(file: str):
     import os
     from pathlib import Path
+    if shared.demo is None:
+        raise HTTPException(status_code=503, detail="server not ready")
     allowed_dirs = shared.demo.allowed_paths
     if file is None or len(file.strip()) == 0:
         raise HTTPException(status_code=400, detail="file path is required")
@@ -375,7 +390,7 @@ def get_deleteimage(file: str):
         raise HTTPException(status_code=404, detail=f"file not found: {file}")
     if os.path.isdir(file):
         raise HTTPException(status_code=403, detail=f"file {file}: is a directory")
-    if os.path.splitext(file)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+    if os.path.splitext(file)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tiff"):
         raise HTTPException(status_code=403, detail=f"file {file}: not an image file")
     try:
         os.remove(file)
@@ -396,7 +411,7 @@ def get_pnginfo(file: str):
         raise HTTPException(status_code=400, detail="file path is required")
     if not any(Path(folder).absolute() in Path(file).absolute().parents for folder in allowed_dirs):
         raise HTTPException(status_code=403, detail=f"file {file}: must be in one of allowed directories")
-    if os.path.splitext(file)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+    if os.path.splitext(file)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tiff"):
         raise HTTPException(status_code=403, detail=f"file {file}: not an image file")
     if not os.path.isfile(file):
         raise HTTPException(status_code=403, detail=f"file {file}: not an image file")
@@ -418,10 +433,10 @@ def post_pnginfo(req: models.ReqImageInfo):
     """Extract generation parameters from a PNG image's metadata. Returns raw info string and parsed parameters dict."""
     from modules import images, script_callbacks, infotext
     if not req.image.strip():
-        return models.ResImageInfo(info="")
+        return models.ResImageInfo(info="", items={}, parameters={})
     image = helpers.decode_base64_to_image(req.image.strip())
     if image is None:
-        return models.ResImageInfo(info="")
+        return models.ResImageInfo(info="", items={}, parameters={})
     geninfo, items = images.read_info_from_image(image)
     if geninfo is None:
         geninfo = ""

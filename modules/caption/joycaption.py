@@ -65,7 +65,7 @@ def load(repo: str | None = None):
     if llava_model is None or opts.repo != repo:
         opts.repo = repo
         llava_model = None
-        log.info(f'Caption: type=vlm model="JoyCaption" {str(opts)}')
+        log.info(f'LLM: type=vlm model="JoyCaption" {str(opts)}')
         processor = AutoProcessor.from_pretrained(repo, max_pixels=1024*1024, cache_dir=shared.opts.hfcache_dir)
         quant_args = model_quant.create_config(module='LLM')
         llava_model = LlavaForConditionalGeneration.from_pretrained(
@@ -108,7 +108,7 @@ def predict(question: str, image, vqa_model: str | None = None) -> str:
     inputs = processor(text=[convo_string], images=[image], return_tensors="pt").to(devices.device)
     inputs['pixel_values'] = inputs['pixel_values'].to(devices.dtype)
     try:
-        with devices.inference_context():
+        with devices.llm_context():
             generate_ids = llava_model.generate( # Generate the captions
                 **inputs,
                 # input_ids=inputs['input_ids'],

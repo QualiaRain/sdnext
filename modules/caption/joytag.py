@@ -1051,7 +1051,7 @@ def load():
         with open(os.path.join(folder, 'top_tags.txt'), encoding='utf8') as f:
             tags = [line.strip() for line in f.readlines() if line.strip()]
         register_aux('joytag', model)
-        log.info(f'Caption: type=vlm model="JoyTag" repo="{MODEL_REPO}" tags={len(tags)}')
+        log.info(f'LLM: type=vlm model="JoyTag" repo="{MODEL_REPO}" tags={len(tags)}')
     move_aux_to_gpu('joytag')
 
 
@@ -1073,7 +1073,7 @@ def predict(image: Image.Image):
     load()
     image_tensor = prepare_image(image, model.image_size).unsqueeze(0).to(device=devices.device, dtype=devices.dtype)
     try:
-        with devices.inference_context():
+        with devices.llm_context():
             preds = model({'image': image_tensor})
             tag_preds = preds['tags'].sigmoid().cpu()
     finally:

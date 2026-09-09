@@ -14,7 +14,9 @@ class ExtraNetworksPageStyles(ui_extra_networks.ExtraNetworksPage):
         shared.prompt_styles.reload()
 
     def parse_desc(self, desc):
-        lines = desc.strip().split("\n")
+        if not isinstance(desc, str):
+            desc = ''
+        lines = desc.strip().split("\n") if desc else []
         params = { 'name': '', 'description': '', 'prompt': '', 'negative': '', 'extra': '', 'wildcards': ''}
         found = ''
         for line in lines:
@@ -75,8 +77,8 @@ class ExtraNetworksPageStyles(ui_extra_networks.ExtraNetworksPage):
             name = getattr(style, 'name', '')
             if name == '':
                 return item
-            txt = f'Prompt: {getattr(style, "prompt", "")}'
-            if len(getattr(style, 'negative_prompt', '')) > 0:
+            txt = f'Prompt: {getattr(style, "prompt", "") or ""}'
+            if len(getattr(style, 'negative_prompt', '') or '') > 0:
                 txt += f'\nNegative: {style.negative_prompt}'
             item = {
                 "type": 'Style',
@@ -114,7 +116,7 @@ class ExtraNetworkStyles(extra_networks.ExtraNetwork):
         super().__init__('style')
         self.indexes = {}
 
-    def activate(self, p, params_list):
+    def activate(self, p, params_list, *args, **kwargs):
         for param in params_list:
             if len(param.items) > 0:
                 style = None
@@ -134,7 +136,6 @@ class ExtraNetworkStyles(extra_networks.ExtraNetwork):
                     p.prompts = [styles.merge_prompts(style.prompt, prompt) for prompt in p.prompts]
                     p.negative_prompts = [styles.merge_prompts(style.negative_prompt, prompt) for prompt in p.negative_prompts]
                     styles.apply_styles_to_extra(p, style)
-
 
     def deactivate(self, p, force=False):
         pass

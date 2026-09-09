@@ -12,9 +12,6 @@ target-version = "py310"
 exclude = [
     "venv",
     ".git",
-    ".ruff_cache",
-    ".vscode",
-    "modules/seedvr/src",
 ]
 
 [tool.ruff.lint]
@@ -68,14 +65,13 @@ ignore = [
     "RUF022", # All is not sorted
     "RUF046", # Value being cast to `int` is already an integer
     "RUF051", # Prefer pop over del
+    "TID252", # Relative imports in vendored code
 ]
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
-"modules/seedvr/**/*.py" = ["TID252"] # Vendored code: relative imports required for package structure
-"pipelines/omnigen2/**/*.py" = ["TID252"] # Vendored code: relative imports required for package structure
 
 [tool.ruff.format]
 quote-style = "double"
@@ -96,6 +92,7 @@ main.prefer-stubs=true
 main.extension-pkg-whitelist=""
 main.fail-on=""
 main.fail-under=10
+main.recursive=true
 main.ignore="CVS"
 main.ignore-paths=[
     "venv",
@@ -105,12 +102,13 @@ main.ignore-paths=[
     ".ruff_cache",
     ".vscode",
     ".*/node_modules/.*",
-    "modules/control/units/xs_pipe.py",
+    "cli",
+    "tmp",
+    "test",
     "modules/control/proc",
     "modules/schedulers/scheduler_*.py",
     "modules/apg",
     "modules/cfgzero",
-    "modules/dml",
     "modules/face",
     "modules/flash_attn_triton_amd",
     "modules/ggml",
@@ -131,35 +129,39 @@ main.ignore-paths=[
     "modules/teacache",
     "modules/todo",
     "modules/res4lyf",
+    "pipelines/boogu",
     "pipelines/bria",
-    "pipelines/flex2",
+    "pipelines/chrono",
     "pipelines/f_lite",
-    "pipelines/hidream",
+    "pipelines/flex2",
     "pipelines/hdm",
+    "pipelines/hidream",
+    "pipelines/lumina_dimmo",
+    "pipelines/mageflow",
     "pipelines/meissonic",
     "pipelines/omnigen2",
     "pipelines/segmoe",
-    "pipelines/xomni",
-    "pipelines/chrono",
+    "pipelines/sefi",
     "pipelines/step1x",
-    "pipelines/vibe",
     "pipelines/ultraflux",
-    "pipelines/lumina_dimmo",
+    "pipelines/vibe",
+    "pipelines/xomni",
     "scripts/consistory",
     "scripts/ctrlx",
     "scripts/daam",
     "scripts/demofusion",
+    "scripts/differential_diffusion.py",
     "scripts/freescale",
     "scripts/infiniteyou",
     "scripts/instantir",
-    "scripts/lbm",
     "scripts/layerdiffuse",
+    "scripts/lbm",
     "scripts/mod",
     "scripts/pixelsmith",
-    "scripts/differential_diffusion.py",
     "scripts/pulid",
     "scripts/xadapter",
     "extensions-builtin/sd-extension-chainner/nodes",
+    "extensions-builtin/sdnq",
 ]
 main.ignore-patterns=[
     ".*test*.py$",
@@ -173,7 +175,6 @@ main.jobs=4
 main.limit-inference-results=100
 main.load-plugins=""
 main.persistent=false
-main.recursive=false
 main.source-roots=""
 main.unsafe-load-any-extension=false
 basic.argument-naming-style="snake_case"
@@ -328,6 +329,8 @@ typecheck.generated-members=[
     "logging.*",
     "torch.*",
     "cv2.*",
+    "av.*",
+    "PIL.*",
 ]
 typecheck.ignore-none=true
 typecheck.ignore-on-opaque-inference=true
@@ -387,53 +390,54 @@ include = [
 exclude = [
     "venv/",
     "*.git/",
-    "scripts/pulid/*",
-    "scripts/pixelsmith/*",
-    "scripts/mod/*",
-    "scripts/layerdiffuse/*",
-    "scripts/lbm/*",
-    "scripts/daam/*",
-    "scripts/infiniteyou/*",
-    "scripts/ctrlx/*",
-    "scripts/consistory/*",
-    "scripts/freescale/*",
-    "scripts/instantir/*",
-    "scripts/softfill.py",
-    "scripts/custom_code.py",
-    "pipelines/zetachroma/",
-    "pipelines/xomni/",
-    "pipelines/vibe/",
-    "pipelines/ultraflux/",
-    "pipelines/step1x/",
-    "pipelines/omnigen2/",
-    "pipelines/meissonic/",
-    "pipelines/model_stablecascade.py",
-    "pipelines/lumina_dimmo",
-    "pipelines/hidream",
-    "pipelines/f_lite",
-    "pipelines/bria",
-    "pipelines/ernie",
-    "pipelines/flex2",
-    "pipelines/anima",
-    "pipelines/meissonic",
     "extensions-builtin/sd-extension-chainner/nodes",
+    "extensions-builtin/sdnq",
+    "modules/apg",
+    "modules/cfgzero",
+    "modules/control/proc",
+    "modules/framepack",
+    "modules/ggml",
+    "modules/hidiffusion",
+    "modules/intel",
+    "modules/onnx_impl",
+    "modules/pag",
+    "modules/postprocess",
+    "modules/control/units/*.py",
+    "modules/res4lyf",
+    "modules/schedulers/scheduler_*.py",
+    "modules/seedvr",
+    "modules/sharpfin",
+    "modules/teacache",
+    "modules/face/*.py",
+    "modules/sub_quadratic_attention.py",
+    "pipelines/**/*.py",
+    "scripts/**/*.py",
 ]
 
 [tool.ty.rules]
-invalid-method-override = "ignore"
-invalid-argument-type = "ignore"
-unresolved-import = "ignore"
-unresolved-attribute = "ignore"
-invalid-assignment = "ignore"
-unsupported-operator = "ignore"
-no-matching-overload = "ignore"
-unsupported-base = "ignore"
-possibly-missing-attribute = "ignore"
-invalid-parameter-default = "ignore"
 call-non-callable = "ignore"
-not-subscriptable = "ignore"
-possibly-missing-submodule = "ignore"
-missing-argument = "ignore"
-unknown-argument = "ignore"
-invalid-attribute-access = "ignore"
 call-top-callable = "ignore"
+deprecated = "ignore"
+invalid-argument-type = "ignore"
+invalid-assignment = "ignore"
+invalid-attribute-access = "ignore"
+invalid-method-override = "ignore"
+invalid-parameter-default = "ignore"
+missing-argument = "ignore"
+no-matching-overload = "ignore"
+not-subscriptable = "ignore"
+possibly-missing-attribute = "ignore"
+possibly-missing-submodule = "ignore"
+unknown-argument = "ignore"
+unresolved-attribute = "ignore"
+unresolved-import = "ignore"
+unsupported-base = "ignore"
+unsupported-operator = "ignore"
+unused-type-ignore-comment = "ignore"
+
+[tool.codespell]
+skip = "./venv, ./.git, __pycache__, ./tmp, ./extensions-builtin, ./configs, ./models, ./outputs, *.txt, *.json, *.yaml, *.map, *.mjs, *.log"
+ignore-words-list = [
+  "te", "nd", "TE", "padd", "inpt", "thw", "thre", "tipe", "ACI", "Foto", "CNA", "LAMA", "lama", "LaMa", "SOM", "COO", "trU", "PatchIn", "AllTime",
+  "youre", "thats", "dont", "whats", "havent", "isnt", "doesnt", "cant", "theres", "receipe", "splitted", "spacial", "patchs",
+]

@@ -3,17 +3,17 @@ import json
 import time
 import numpy as np
 from PIL import Image, ImageOps
-from modules import shared, devices, errors, images, scripts_manager, memstats, script_callbacks, extra_networks, detailer, sd_models, sd_checkpoint, sd_vae, processing_helpers, processing_grading, timer
+from modules import shared, devices, errors, images, scripts_manager, memstats, script_callbacks, extra_networks, sd_models, sd_checkpoint, sd_vae, processing_helpers, processing_grading, timer, masking
 from modules.logger import log
 from modules.sd_hijack_hypertile import context_hypertile_vae, context_hypertile_unet
+from modules.processing_info import create_infotext
 from modules.processing_class import ( # pylint: disable=unused-import
     StableDiffusionProcessing,
     StableDiffusionProcessingTxt2Img,
     StableDiffusionProcessingImg2Img,
-    StableDiffusionProcessingVideo,
     StableDiffusionProcessingControl,
+    StableDiffusionProcessingVideo,
 )
-from modules.processing_info import create_infotext
 
 
 opt_C = 4
@@ -42,8 +42,8 @@ class Processed:
 
         self.prompt = p.prompt or ''
         self.negative_prompt = p.negative_prompt or ''
-        self.prompt = self.prompt if type(self.prompt) != list else self.prompt[0]
-        self.negative_prompt = self.negative_prompt if type(self.negative_prompt) != list else self.negative_prompt[0]
+        self.prompt = self.prompt[0] if isinstance(self.prompt, list) and self.prompt else self.prompt
+        self.negative_prompt = self.negative_prompt[0] if isinstance(self.negative_prompt, list) and self.negative_prompt else self.negative_prompt
         self.styles = p.styles
 
         self.bytes = binary
@@ -52,9 +52,9 @@ class Processed:
         self.height = p.height if hasattr(p, 'height') else (self.images[0].height if len(self.images) > 0 else 0)
 
         self.sampler_name = p.sampler_name or ''
-        self.cfg_scale = p.cfg_scale if p.cfg_scale > 1 else None
+        self.cfg_scale = p.cfg_scale if (p.cfg_scale is not None and p.cfg_scale > -1) else None
         self.cfg_end = p.cfg_end if p.cfg_end < 1 else None
-        self.image_cfg_scale = p.image_cfg_scale or 0
+        self.cfg_image = p.cfg_image if (p.cfg_image is not None and p.cfg_image > -1) else None
         self.steps = p.steps or 0
         self.batch_size = max(1, p.batch_size)
         self.denoising_strength = p.denoising_strength
@@ -62,7 +62,7 @@ class Processed:
         self.audio = audio
 
         self.detailer = p.detailer_enabled or False
-        self.detailer_model = shared.opts.detailer_model if p.detailer_enabled else None
+        self.detailer_model = 'Detailer' if p.detailer_enabled else None
         self.seed_resize_from_w = p.seed_resize_from_w
         self.seed_resize_from_h = p.seed_resize_from_h
         self.extra_generation_params = p.extra_generation_params
@@ -87,7 +87,6 @@ class Processed:
         self.info = info or create_infotext(p)
         self.infotexts = infotexts or [self.info]
         self.comments = comments or ''
-        memstats.reset_stats()
 
     def js(self):
         obj = {
@@ -125,7 +124,7 @@ class Processed:
     def infotext(self, p: StableDiffusionProcessing, index):
         return create_infotext(p, self.all_prompts, self.all_seeds, self.all_subseeds, comments=[], position_in_batch=index % self.batch_size, iteration=index // self.batch_size)
 
-    def __str___(self):
+    def __str__(self):
         return f'{self.__class__.__name__}: {self.__dict__}'
 
 
@@ -153,11 +152,12 @@ def process_images(p: StableDiffusionProcessing) -> Processed | None:
     for k, v in p.override_settings.copy().items():
         if shared.opts.data.get(k, None) is None and shared.opts.data_labels.get(k, None) is None:
             continue
-        orig = shared.opts.data.get(k, None) or shared.opts.data_labels[k].default
+        # getattr resolves the value via data then data_labels; compat opts (clip_skip) have no data_labels entry
+        orig = getattr(shared.opts, k, None)
         if orig == v or (type(orig) == str and os.path.splitext(orig)[0] == v):
             p.override_settings.pop(k, None)
     for k in p.override_settings.keys():
-        stored_opts[k] = shared.opts.data.get(k, None) or shared.opts.data_labels[k].default
+        stored_opts[k] = getattr(shared.opts, k, None)
     results = None
     try:
         # if no checkpoint override or the override checkpoint can't be found, remove override entry and load opts checkpoint
@@ -243,6 +243,10 @@ def process_images(p: StableDiffusionProcessing) -> Processed | None:
                 if k == 'sd_vae':
                     sd_vae.reload_vae_weights()
         timer.process.record('post')
+
+    if os.environ.get('SD_UNLOAD_MODEL', None) is not None:
+        sd_models.unload_model_weights()
+
     return results
 
 
@@ -279,7 +283,7 @@ def process_init(p: StableDiffusionProcessing):
             p.all_subseeds = [int(subseed) + x for x in range(len(p.all_prompts))]
     if reset_prompts:
         if not hasattr(p, 'keep_prompts'):
-            p.all_prompts, p.all_negative_prompts = shared.prompt_styles.apply_styles_to_prompts(p.all_prompts, p.all_negative_prompts, p.styles, p.all_seeds)
+            p.all_prompts, p.all_negative_prompts = shared.prompt_styles.apply_styles_to_prompts(p.all_prompts, p.all_negative_prompts, p.styles, p.all_seeds, p=p)
             p.prompts = p.all_prompts[(p.iteration * p.batch_size):((p.iteration+1) * p.batch_size)]
             p.negative_prompts = p.all_negative_prompts[(p.iteration * p.batch_size):((p.iteration+1) * p.batch_size)]
 
@@ -316,16 +320,16 @@ def process_samples(p: StableDiffusionProcessing, samples):
                 if not p.do_not_save_samples and get_opt(p, 'save_images_before_detailer'):
                     info = create_infotext(p, p.prompts, p.seeds, p.subseeds, index=i)
                     images.save_image(image, path=p.outpath_samples, basename="", seed=p.seeds[i], prompt=p.prompts[i], extension=get_opt(p, 'samples_format'), info=info, p=p, suffix="-before-detailer")
-                sample = detailer.detail(sample, p)
+                sample = shared.detailer.restore(sample, p)
                 if isinstance(sample, list):
                     if len(sample) > 0:
-                        image = Image.fromarray(sample[0])
+                        image = sample[0] if isinstance(sample[0], Image.Image) else Image.fromarray(sample[0])
                     if len(sample) > 1:
                         annotated = sample[1] if isinstance(sample[1], Image.Image) else Image.fromarray(sample[1])
                         out_images.append(annotated)
                         out_infotexts.append("Detailer annotations")
                 elif sample is not None:
-                    image = Image.fromarray(sample)
+                    image = sample if isinstance(sample, Image.Image) else Image.fromarray(sample)
 
             if p.color_corrections is not None and i < len(p.color_corrections):
                 p.ops.append('color')
@@ -373,28 +377,12 @@ def process_samples(p: StableDiffusionProcessing, samples):
             if _overlay:
                 image = apply_overlay(image, p.paste_to, i, p.overlay_images)
 
-            _save_mask = get_opt(p, 'save_mask')
-            _save_mask_composite = get_opt(p, 'save_mask_composite')
-            _return_mask = get_opt(p, 'return_mask')
-            _return_mask_composite = get_opt(p, 'return_mask_composite')
-            if hasattr(p, 'mask_for_overlay') and p.mask_for_overlay and any([_save_mask, _save_mask_composite, _return_mask, _return_mask_composite]):
-                image_mask = p.mask_for_overlay.convert('RGB')
-                image1 = image.convert('RGBA').convert('RGBa')
-                image2 = Image.new('RGBa', image.size)
-                mask = images.resize_image(3, p.mask_for_overlay, image.width, image.height).convert('L')
-                image_mask_composite = Image.composite(image1, image2, mask).convert('RGBA')
-                info = create_infotext(p, p.prompts, p.seeds, p.subseeds, index=i)
-                _fmt = get_opt(p, 'samples_format')
-                if _save_mask:
-                    images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], _fmt, info=info, p=p, suffix="-mask")
-                if _save_mask_composite:
-                    images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], _fmt, info=info, p=p, suffix="-mask-composite")
-                if _return_mask:
-                    out_infotexts.append(info)
-                    out_images.append(image_mask)
-                if _return_mask_composite:
-                    out_infotexts.append(info)
-                    out_images.append(image_mask_composite)
+            if masking.opts.mask_return and p.image_mask is not None:
+                out_infotexts.append(create_infotext(p, all_prompts=['Mask']))
+                if p.mask_for_overlay is not None:
+                    out_images.append(p.mask_for_overlay.convert('RGB'))
+                else:
+                    out_images.append(p.image_mask.convert('RGB'))
 
             _inc_mask = getattr(p, 'include_mask', None)
             if _inc_mask is None:
@@ -426,11 +414,32 @@ def process_samples(p: StableDiffusionProcessing, samples):
         image.info["parameters"] = info
         out_infotexts.append(info)
         out_images.append(image)
+
     shared.history.add(None, info=out_infotexts, ops=p.ops, images=out_images)
     return out_images, out_infotexts
 
 
+def print_stats():
+    log.debug(f'Processed: timers={timer.process.dct(no_total=True)}')
+    log.debug(f'Processed: memory={memstats.memory_stats()}')
+
+    if devices.triton_ok:
+        # from modules.timer_sdnq import update_sdnq_attention_timers
+        # update_sdnq_attention_timers()
+        if timer.autotune.get_total() > 0.1:
+            log.debug(f'Processed: autotune={timer.autotune.dct(min_time=0, no_total=True)}')
+        timer.autotune.reset()
+
+        from modules.sd_models_compile import update_compile_times
+        update_compile_times()
+        dynamo_dct = timer.dynamo.dct(min_time=1.0, no_total=True)
+        timer.dynamo.reset()
+        if dynamo_dct:
+            log.debug(f'Processed: dynamo={dynamo_dct}')
+
+
 def process_images_inner(p: StableDiffusionProcessing) -> Processed:
+    t0 = time.time()
     if type(p.prompt) == list:
         assert len(p.prompt) > 0
     else:
@@ -449,7 +458,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     jobid = shared.state.begin('Process')
     shared.state.batch_count = p.n_iter
     with devices.inference_context():
-        t0 = time.time()
+        t1 = time.time()
         if not hasattr(p, 'skip_init'):
             p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
         debug(f'Processing inner: args={vars(p)}')
@@ -479,6 +488,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if not p.prompts:
                 break
             p.prompts, p.network_data = extra_networks.parse_prompts(p.prompts)
+
+
             if p.scripts is not None and isinstance(p.scripts, scripts_manager.ScriptRunner):
                 p.scripts.process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
 
@@ -510,6 +521,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if not _keep:
                     break
 
+            audio = getattr(samples, 'audio', None) # captured before the batch script hooks, which rewrap samples into a plain list without the attribute
+
             if p.scripts is not None and isinstance(p.scripts, scripts_manager.ScriptRunner):
                 p.scripts.postprocess_batch(p, samples, batch_number=n)
             if p.scripts is not None and isinstance(p.scripts, scripts_manager.ScriptRunner):
@@ -527,8 +540,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                     if batch_image is not None and batch_image not in output_images:
                         output_images.append(batch_image)
                         infotexts.append(batch_infotext)
-
-            audio = getattr(samples, 'audio', None)
 
             if shared.cmd_opts.lowvram:
                 devices.torch_gc(force=True, reason='lowvram')
@@ -549,7 +560,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 shared.sd_model.restore_pipeline()
             shared.sd_model = sd_models.set_diffuser_pipe(shared.sd_model, sd_models.DiffusersTaskType.TEXT_2_IMAGE)
 
-        t1 = time.time()
+        t2 = time.time()
+        timer.process.add('process', t2 - t1)
 
         p.color_corrections = None
         index_of_first_image = 0
@@ -584,10 +596,13 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         p.scripts.postprocess(p, results)
     timer.process.record('post')
     p.ops = list(set(p.ops))
+    t3 = time.time()
+    timer.process.add('wall', t3 - t0)
+
     if not p.disable_extra_networks:
-        log.info(f'Processed: images={len(output_images)} its={(p.steps * len(output_images)) / (t1 - t0):.2f} ops={p.ops}')
-        log.debug(f'Processed: timers={timer.process.dct()}')
-        log.debug(f'Processed: memory={memstats.memory_stats()}')
+        its = (p.steps * len(output_images)) / (t2 - t1)
+        log.info(f'Processed: images={len(output_images)} its={its:.3f} ops={p.ops}')
+        print_stats()
 
     if shared.cmd_opts.lowvram or shared.cmd_opts.medvram:
         devices.torch_gc(force=True, reason='final')

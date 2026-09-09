@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import logging
 import socket
@@ -102,27 +103,75 @@ def setup_logging(debug=None, trace=None, filename=None):
             self.buffer = []
             self.formatter = logging.Formatter('{ "asctime":"%(asctime)s", "created":%(created)f, "facility":"%(name)s", "pid":%(process)d, "tid":%(thread)d, "level":"%(levelname)s", "module":"%(module)s", "func":"%(funcName)s", "msg":"%(message)s" }')
 
+        def strip(self, line):
+            if line is None:
+                return ""
+            ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
+            return ansi_escape.sub('', str(line))
+
         def emit(self, record):
-            if record.msg is not None and not isinstance(record.msg, str):
-                record.msg = str(record.msg)
+            if record.msg is None:
+                record.msg = ""
             try:
-                record.msg = record.msg.replace('"', "'")
+                msg = record.getMessage()
+            except Exception:
+                return
+            msg = msg.replace('"', "'")
+            msg = self.strip(msg)
+            try:
+                if '❱ ' in msg: # only last 3 lines of traceback
+                    lines = [l.strip() for l in msg.splitlines() if l.strip() and not l.startswith(' ')]
+                    if len(lines) > 3:
+                        lines = lines[-3:]
+                    lines = [l.replace('│   ', '').strip() for l in lines]
+                    lines.insert(0, 'Exception traceback:')
+                    msg = '\n'.join(lines)
             except Exception:
                 pass
-            msg = self.format(record)
-            self.buffer.append(msg)
+            try:
+                if len(msg) > 1024:
+                    msg = msg[:1024] + '...'
+            except Exception:
+                pass
+            record.msg = msg
+            try:
+                formatted = self.format(record)
+                self.buffer.append(formatted)
+            except Exception:
+                pass
             if len(self.buffer) > self.capacity:
                 self.buffer.pop(0)
 
         def get(self):
             return self.buffer
 
+    class FileBuffer(RotatingFileHandler):
+        def __init__(self, filename, maxBytes=32*1024*1024, backupCount=9, encoding='utf-8', delay=True):
+            super().__init__(filename, maxBytes=maxBytes, backupCount=backupCount, encoding=encoding, delay=delay)
+            self.ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
+            if trace:
+                self.formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s | %(module)s:%(pathname)s:%(lineno)d:%(message)s')
+            else:
+                self.formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
+
+        def strip(self, line):
+            if line is None:
+                return ""
+            return self.ansi_escape.sub('', str(line))
+
+        def emit(self, record):
+            record.msg = self.strip(record.msg)
+            super().emit(record)
+
     class LogFilter(logging.Filter):
         def __init__(self):
             super().__init__()
 
         def filter(self, record):
-            return len(record.getMessage()) > 2
+            try:
+                return len(record.getMessage()) > 2
+            except Exception:
+                return False
 
     def override_padding(self, console, options): # pylint: disable=redefined-outer-name
         style = console.get_style(self.style)
@@ -221,11 +270,7 @@ def setup_logging(debug=None, trace=None, filename=None):
     rh.setLevel(level)
     log.addHandler(rh)
 
-    fh = RotatingFileHandler(log_file, maxBytes=32*1024*1024, backupCount=9, encoding='utf-8', delay=True) # 10MB default for log rotation
-    if trace:
-        fh.formatter = logging.Formatter(f'%(asctime)s | {hostname} | %(name)s | %(levelname)s | %(module)s | | %(pathname)s:%(lineno)d | %(message)s')
-    else:
-        fh.formatter = logging.Formatter(f'%(asctime)s | {hostname} | %(name)s | %(levelname)s | %(module)s | %(message)s')
+    fh = FileBuffer(log_file)
     fh.addFilter(log_filter)
     fh.setLevel(logging.DEBUG)
     log.addHandler(fh)
@@ -249,9 +294,21 @@ def setup_logging(debug=None, trace=None, filename=None):
     log.quiet = quiet_log
 
     # overrides
-    logging.getLogger("urllib3").setLevel(logging.ERROR)
-    logging.getLogger("httpx").setLevel(logging.ERROR)
-    logging.getLogger("diffusers").setLevel(logging.ERROR)
-    logging.getLogger("torch").setLevel(logging.ERROR)
-    logging.getLogger("ControlNet").handlers = log.handlers
     logging.getLogger("lycoris").handlers = log.handlers
+    logging.getLogger("ControlNet").handlers = log.handlers
+    logging.getLogger("urllib3").setLevel(logging.ERROR)
+
+    if os.environ.get('SD_DIFFUSERS_DEBUG', None) is not None:
+        logging.getLogger("diffusers").setLevel(logging.DEBUG)
+        logging.getLogger("diffusers.modular_pipelines").setLevel(logging.DEBUG)
+    else:
+        logging.getLogger("diffusers").setLevel(logging.ERROR)
+        logging.getLogger("diffusers.modular_pipelines").setLevel(logging.ERROR)
+    if os.environ.get('SD_TRANSFORMERS_DEBUG', None) is not None:
+        logging.getLogger("transformers").setLevel(logging.DEBUG)
+    else:
+        logging.getLogger("transformers").setLevel(logging.ERROR)
+    if os.environ.get('SD_TORCH_DEBUG', None) is not None:
+        logging.getLogger("torch").setLevel(logging.DEBUG)
+    else:
+        logging.getLogger("torch").setLevel(logging.WARNING)

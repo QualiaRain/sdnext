@@ -43,10 +43,6 @@ def full_vqgan_decode(latents, model):
         devices.torch_gc(force=True)
         shared.mem_mon.reset()
 
-    base_device = None
-    if shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False):
-        base_device = sd_models.move_base(model, devices.cpu)
-
     if shared.opts.diffusers_offload_mode == "balanced":
         shared.sd_model = sd_models.apply_balanced_offload(shared.sd_model)
     elif shared.opts.diffusers_offload_mode != "sequential":
@@ -76,8 +72,6 @@ def full_vqgan_decode(latents, model):
 
     if shared.opts.diffusers_offload_mode == "balanced":
         shared.sd_model = sd_models.apply_balanced_offload(shared.sd_model)
-    elif shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False) and base_device is not None:
-        sd_models.move_base(model, base_device)
     t1 = time.time()
     if debug:
         log_debug(f'VAE memory: {shared.mem_mon.read()}')
@@ -96,14 +90,10 @@ def full_vae_decode(latents, model):
     if debug:
         devices.torch_gc(force=True)
         shared.mem_mon.reset()
-
-    base_device = None
-    if shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False):
-        base_device = sd_models.move_base(model, devices.cpu)
-    elif shared.opts.diffusers_offload_mode != "sequential":
+    if shared.opts.diffusers_offload_mode != "sequential":
         sd_models.move_model(model.vae, devices.device)
 
-    sd_models.set_vae_options(model, vae=None, op='decode')
+    # sd_models.set_vae_options(model, vae=None, op='decode') # set during model load
     upcast = (model.vae.dtype == torch.float16) and (getattr(model.vae.config, 'force_upcast', False) or shared.opts.no_half_vae)
     if upcast:
         if hasattr(model, 'upcast_vae'): # this is done by diffusers automatically if output_type != 'latent'
@@ -130,8 +120,8 @@ def full_vae_decode(latents, model):
         latents = latents + shift_factor
 
     # check dims
-    if model.vae.__class__.__name__ in ['AutoencoderKLWan'] and latents.ndim == 4:
-        latents = latents.unsqueeze(2) # wan is __nhw
+    if model.vae.__class__.__name__ in ['AutoencoderKLWan', 'AutoencoderKLQwenImage'] and latents.ndim == 4:
+        latents = latents.unsqueeze(2) # video VAEs (wan, qwen-image) expect a frame axis
 
     # handle quants
     if getattr(model.vae, "post_quant_conv", None) is not None:
@@ -151,7 +141,10 @@ def full_vae_decode(latents, model):
     log_debug(f'VAE config: {model.vae.config}')
     try:
         with devices.inference_context():
-            decoded = model.vae.decode(latents, return_dict=False)[0]
+            decoded = model.vae.decode(latents, return_dict=False)
+            if decoded is None or len(decoded) == 0:
+                raise RuntimeError('returned no data')
+            decoded = decoded[0]
     except Exception as e:
         log.error(f'VAE decode: {e}')
         if 'out of memory' not in str(e) and 'no data' not in str(e):
@@ -169,9 +162,6 @@ def full_vae_decode(latents, model):
             model.vae.apply(sd_models_utils.convert_to_faketensors)
             devices.torch_gc(force=True)
 
-    elif shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False) and base_device is not None:
-        sd_models.move_base(model, base_device)
-
     t1 = time.time()
     if debug:
         log_debug(f'VAE memory: {shared.mem_mon.read()}')
@@ -183,12 +173,10 @@ def full_vae_decode(latents, model):
 
 def full_vae_encode(image, model):
     t0 = time.time()
-    if shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False) and hasattr(model, 'unet'):
-        log_debug('Moving to CPU: model=UNet')
-        unet_device = model.unet.device
-        sd_models.move_model(model.unet, devices.cpu)
     if shared.opts.diffusers_offload_mode != "sequential" and hasattr(model, 'vae'):
         sd_models.move_model(model.vae, devices.device)
+        if getattr(model.vae, 'sdnext_ondemand', False):
+            model.vae.to(devices.device) # the image placement below derives from vae.device, and the entry bridge would onload the weights only after the input is already bound
     vae_name = sd_vae.loaded_vae_file if sd_vae.loaded_vae_file is not None else "default"
     log_debug(f'Encode vae="{vae_name}" dtype={model.vae.dtype} upcast={model.vae.config.get("force_upcast", None)}')
 
@@ -207,8 +195,6 @@ def full_vae_encode(image, model):
         model.vae = model.vae.to(dtype=model.vae.orig_dtype)
         del model.vae.orig_dtype
 
-    if shared.opts.diffusers_move_unet and not getattr(model, 'has_accelerate', False) and hasattr(model, 'unet'):
-        sd_models.move_model(model.unet, unet_device)
     t1 = time.time()
     log.debug(f'Encode: vae="{vae_name}" upcast={upcast} slicing={getattr(model.vae, "use_slicing", None)} tiling={getattr(model.vae, "use_tiling", None)} latents={encoded.shape}:{encoded.device}:{encoded.dtype} time={t1-t0:.3f}')
     return encoded
@@ -246,13 +232,31 @@ def vae_postprocess(tensor, model, output_type='np'):
             if hasattr(model, 'video_processor'):
                 if tensor.ndim == 6 and tensor.shape[1] == 1:
                     tensor = tensor.squeeze(0)
-                images = model.video_processor.postprocess_video(tensor, output_type='pil')
+                if tensor.ndim == 4 and tensor.shape[1] == 3:
+                    tensor = tensor.unsqueeze(2)
+                try:
+                    with np.errstate(all='raise'):
+                        images = model.video_processor.postprocess_video(tensor, output_type='pil')
+                except (Exception, FloatingPointError) as e:
+                    amin, amax = tensor.min().item(), tensor.max().item()
+                    log.warning(f'VAE postprocess: type=video tensor={tensor.shape}:{tensor.device}:{tensor.dtype} min={amin} max={amax} error="{e}"')
+                    images = tensor
+                    if debug:
+                        errors.display(e, 'VAE postprocess: type=video')
                 if isinstance(images, list) and len(images) > 0 and isinstance(images[0], list):
                     images = [frame for batch in images for frame in batch]
             elif hasattr(model, 'image_processor'):
                 if tensor.ndim == 5 and tensor.shape[1] == 3: # Qwen Image
                     tensor = tensor[:, :, 0]
-                images = model.image_processor.postprocess(tensor, output_type=output_type)
+                try:
+                    with np.errstate(all='raise'):
+                        images = model.image_processor.postprocess(tensor, output_type=output_type)
+                except (Exception, FloatingPointError) as e:
+                    amin, amax = tensor.min().item(), tensor.max().item()
+                    log.warning(f'VAE postprocess: type=image tensor={tensor.shape}:{tensor.device}:{tensor.dtype} min={amin} max={amax} error="{e}"')
+                    images = tensor
+                    if debug:
+                        errors.display(e, 'VAE postprocess: type=image')
             elif hasattr(model, "vqgan"):
                 images = tensor.permute(0, 2, 3, 1).cpu().float().numpy()
                 if output_type == "pil":
@@ -263,6 +267,27 @@ def vae_postprocess(tensor, model, output_type='np'):
                 if tensor.ndim == 5 and tensor.shape[1] == 3: # Qwen Image
                     tensor = tensor[:, :, 0]
                 images = model.image_processor.postprocess(tensor, output_type=output_type)
+
+            if torch.is_tensor(images): # failed to postprocess, do naive conversion
+                try:
+                    if torch.isnan(images).any().item():
+                        log.error(f'VAE postprocess: type=fallback tensor={images.shape}:{images.device}:{images.dtype} error="image contains invalid NaN values"')
+                        images.nan_to_num_(nan=0.0)
+                    while images.ndim > 4:
+                        images = images.squeeze(0)
+                    if images.shape[0] == 3:
+                        images = images.permute(1, 2, 3, 0).cpu().float().numpy()
+                    else:
+                        images = images.permute(0, 2, 3, 1).cpu().float().numpy()
+                    if images.min() < 0 or images.max() > 1:
+                        images = (images - images.min()) / (images.max() - images.min()) # naive normalization
+                    if output_type == "pil":
+                        images = model.numpy_to_pil(images)
+                except (Exception, FloatingPointError) as e:
+                    amin, amax = images.min().item(), images.max().item()
+                    log.warning(f'VAE postprocess: type=fallback tensor={images.shape}:{images.device}:{images.dtype} min={amin} max={amax} error="{e}"')
+                    if debug:
+                        errors.display(e, 'VAE postprocess unknown')
         else:
             images = tensor if isinstance(tensor, list) or isinstance(tensor, np.ndarray) else [tensor]
     except Exception as e:
@@ -308,8 +333,10 @@ def vae_decode(latents, model, output_type='np', vae_type='Full', width=None, he
         latents = model._unpack_latents(latents.unsqueeze(0), latent_num_frames, height // 32, width // 32, model.transformer_spatial_patch_size, model.transformer_temporal_patch_size) # pylint: disable=protected-access
         latents = model._denormalize_latents(latents, model.vae.latents_mean, model.vae.latents_std, model.vae.config.scaling_factor) # pylint: disable=protected-access
     elif hasattr(model, '_unpack_latents') and hasattr(model, "vae_scale_factor") and width is not None and height is not None and latents.ndim == 3: # FLUX
-        latents = model._unpack_latents(latents, height, width, model.vae_scale_factor) # pylint: disable=protected-access
-
+        try:
+            latents = model._unpack_latents(latents, height, width, model.vae_scale_factor) # pylint: disable=protected-access
+        except Exception:
+            latents = model._unpack_latents(latents, height, width) # pylint: disable=protected-access # pythoning ask-for-forgiveness if method does not support vae_scale_factor
     if latents.ndim == 3: # lost a batch dim in hires
         latents = latents.unsqueeze(0)
     if latents.shape[-1] <= 4: # not a latent, likely an image
@@ -330,6 +357,7 @@ def vae_decode(latents, model, output_type='np', vae_type='Full', width=None, he
     if shared.cmd_opts.profile or debug:
         t1 = time.time()
         log.debug(f'Profile: VAE decode: {t1-t0:.2f}')
+    sd_models.offload_ondemand(model)
     devices.torch_gc()
     shared.state.end(jobid)
     return images
@@ -354,6 +382,7 @@ def vae_encode(image, model, vae_type='Full'): # pylint: disable=unused-variable
     else:
         log.error('VAE not found in model')
         latents = []
+    sd_models.offload_ondemand(model)
     devices.torch_gc()
     shared.state.end(jobid)
     return latents

@@ -1,7 +1,7 @@
 ---
 name: check-models
 description: "Audit SD.Next model integrations end-to-end: loaders, detect/routing, reference catalogs, and pipeline API contracts."
-argument-hint: "Optionally focus on a model family, repo id, or a subset: loader, detect-routing, references, pipeline-contracts"
+argument-hint: "Optionally focus on a specific model family, repo id, or one or more audit categories: loader, detect-routing, references, pipeline-contracts"
 ---
 
 # Check Model Integrations End-To-End
@@ -15,9 +15,13 @@ Run a consolidated model-integration audit that combines loader checks, detect/r
 - A custom pipeline was ported and needs contract validation
 - You want a pre-PR integration quality gate for model-related changes
 
+## Guidance
+
+- Consult `.github/instructions/core.instructions.md` for relevant core runtime and model integration guidance before proceeding.
+
 ## Combined Scope
 
-This skill combines four audit surfaces:
+This skill combines four audit surfaces. Run them in this order unless user scope limits categories:
 
 1. Loader consistency (`check-loaders` equivalent)
 2. Detect/routing parity (`check-detect-routing` equivalent)
@@ -30,9 +34,9 @@ This skill combines four audit surfaces:
 - `modules/sd_detect.py`
 - `modules/sd_models.py`
 - `modules/modeldata.py`
-- `data/reference.json`
+- `data/reference-base.json`
 - `data/reference-cloud.json`
-- `data/reference-quant.json`
+- `data/reference-quantized.json`
 - `data/reference-distilled.json`
 - `data/reference-nunchaku.json`
 - `data/reference-community.json`
@@ -79,9 +83,9 @@ Verify references for model families intended to appear in model references.
 Checks:
 
 - Correct category file placement by type:
-  - base -> `data/reference.json`
+  - base -> `data/reference-base.json`
   - cloud -> `data/reference-cloud.json`
-  - quant -> `data/reference-quant.json`
+  - quant -> `data/reference-quantized.json`
   - distilled -> `data/reference-distilled.json`
   - nunchaku -> `data/reference-nunchaku.json`
   - community -> `data/reference-community.json`

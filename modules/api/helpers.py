@@ -1,4 +1,5 @@
 import io
+import os
 import base64
 from PIL import Image, PngImagePlugin
 import piexif
@@ -7,19 +8,28 @@ from fastapi.exceptions import HTTPException
 from modules import shared, sd_samplers
 from modules.logger import log
 
+
 _upload_store_getter = None
 
 
 def register_upload_store(getter_fn):
-    global _upload_store_getter
+    global _upload_store_getter # pylint: disable=global-statement
     _upload_store_getter = getter_fn
 
 
 def validate_sampler_name(name):
-    config = sd_samplers.all_samplers_map.get(name, None)
-    if config is None:
+    if sd_samplers.is_separator(name):  # dropdown divider, not a selectable sampler
         raise HTTPException(status_code=404, detail="Sampler not found")
-    return name
+    config = sd_samplers.all_samplers_map.get(name, None)
+    if config is not None:
+        return name
+    # accept case-insensitive and alias variants, returning the canonical name so the
+    # exact-match lookup in create_sampler resolves instead of silently using the model default
+    if isinstance(name, str) and name not in ('', 'None'):
+        sampler = sd_samplers.find_sampler(name)
+        if sampler is not None:
+            return sampler.name
+    raise HTTPException(status_code=404, detail="Sampler not found")
 
 
 def decode_base64_to_image(encoding, quiet=False):
@@ -28,7 +38,10 @@ def decode_base64_to_image(encoding, quiet=False):
     if isinstance(encoding, str) and encoding.startswith("upload:"):
         return _resolve_upload_ref(encoding, quiet)
     if encoding.startswith("data:image/"):
-        encoding = encoding.split(";")[1].split(",")[1]
+        parts = encoding.split(";", 1)
+        if len(parts) == 2:
+            parts2 = parts[1].split(",", 1)
+            encoding = parts2[1] if len(parts2) == 2 else parts2[0]
     try:
         decoded = base64.b64decode(encoding)
         data = io.BytesIO(decoded)
@@ -76,6 +89,24 @@ def encode_pil_to_base64(image):
     save_image(image, fn=buffered, ext=shared.opts.samples_format)
     b64 = base64.b64encode(buffered.getvalue())
     return b64
+
+
+MAX_B64_BYTES = 256 * 1024 * 1024 # base64 expands ~4/3 and the response is built in memory; larger artifacts are fetched by path instead
+
+
+def encode_file_to_base64(fn: str, max_bytes: int = MAX_B64_BYTES) -> str | None:
+    try:
+        if fn is None or not os.path.isfile(fn):
+            return None
+        size = os.path.getsize(fn)
+        if size > max_bytes:
+            log.warning(f'API cannot encode file: fn="{fn}" size={size} max={max_bytes}')
+            return None
+        with open(fn, 'rb') as f:
+            return base64.b64encode(f.read()).decode('ascii')
+    except Exception as e:
+        log.warning(f'API cannot encode file: fn="{fn}" {e}')
+        return None
 
 
 def upscaler_to_index(name: str):

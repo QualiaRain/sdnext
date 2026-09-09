@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import base64
 import os
@@ -11,8 +13,8 @@ from modules.logger import log
 from modules.json_helpers import writefile
 
 
-checkpoints_list = {}
-checkpoint_aliases = {}
+checkpoints_list: dict[str, CheckpointInfo] = {}
+checkpoint_aliases: dict[str, CheckpointInfo] = {}
 checkpoints_loaded = collections.OrderedDict()
 model_dir = "Stable-diffusion"
 model_path = os.path.abspath(os.path.join(paths.models_path, model_dir))
@@ -24,16 +26,16 @@ warn_once = False
 
 
 class CheckpointInfo:
-    def __init__(self, filename, name=None, sha=None, subfolder=None, model_type: str = 'checkpoint', folder: str|None = None):
+    def __init__(self, filename: str, name: str | None = None, sha: str | None = None, subfolder: str | None = None, model_type: str = 'checkpoint', folder: str | None = None):
         self.name = name
         self.hash = sha
-        self.filename = filename
+        self.filename = filename if filename is not None else 'none'
         self.type = ''
         self.subfolder = subfolder
-        relname = filename
+        relname = self.filename
         app_path = os.path.abspath(paths.script_path)
 
-        def rel(fn, path):
+        def rel(fn: str, path: str):
             try:
                 return os.path.relpath(fn, path)
             except Exception:
@@ -146,7 +148,7 @@ def list_models():
             checkpoint_info.register()
     diffusers_list = []
     for repo in modelloader.load_diffusers_models(clear=True):
-        checkpoint_info = CheckpointInfo(repo['name'], sha=repo['hash'], folder=repo['folder'])
+        checkpoint_info = CheckpointInfo(repo['name'], sha=repo['hash'], folder=repo['path'])
         diffusers_list.append(checkpoint_info)
         if checkpoint_info.name is not None:
             checkpoint_info.register()
@@ -208,17 +210,17 @@ def remove_hash(s):
     return re.sub(r'\s*\[.*?\]', '', s)
 
 
-def get_closest_checkpoint_match(s: str) -> CheckpointInfo:
+def get_closest_checkpoint_match(s: str) -> CheckpointInfo | None:
     # direct hf url
     if s.startswith('https://huggingface.co/'):
         model_name = s.replace('https://huggingface.co/', '')
-        checkpoint_info = CheckpointInfo(model_name) # create a virutal model info
+        checkpoint_info = CheckpointInfo(model_name) # create a virtual model info
         checkpoint_info.type = 'huggingface'
         log.debug(f'Seach model: name="{s}" matched="{checkpoint_info.path}" type=huggingface')
         return checkpoint_info
     if s.startswith('huggingface/'):
         model_name = s.replace('huggingface/', '')
-        checkpoint_info = CheckpointInfo(model_name) # create a virutal model info
+        checkpoint_info = CheckpointInfo(model_name) # create a virtual model info
         checkpoint_info.type = 'huggingface'
         return checkpoint_info
 
@@ -357,7 +359,7 @@ def extract_thumbnail(filename, data):
         log.error(f"Error extracting thumbnail: {filename} {e}")
 
 
-def read_metadata_from_safetensors(filename):
+def read_metadata_from_safetensors(filename: str):
     global sd_metadata # pylint: disable=global-statement
     if sd_metadata is None:
         sd_metadata = shared.readfile(sd_metadata_file, lock=True, as_type="dict") if os.path.isfile(sd_metadata_file) else {}
@@ -381,7 +383,8 @@ def read_metadata_from_safetensors(filename):
                 return res
             json_data = json_start + file.read(metadata_len-2)
             json_obj = json.loads(json_data)
-            for k, v in json_obj.get("__metadata__", {}).items():
+            json_dct = json_obj.get("__metadata__", {})
+            for k, v in json_dct.items():
                 if k == 'modelspec.thumbnail' and v.startswith("data:"):
                     extract_thumbnail(filename, v)
                 if v.startswith("data:"):
@@ -389,7 +392,12 @@ def read_metadata_from_safetensors(filename):
                 if k == 'format' and v == 'pt':
                     continue
                 large = True if len(v) > 2048 else False
-                if large and k in ['ss_datasets', 'workflow', 'prompt', 'ss_bucket_info', 'sd_metadata_file']:
+                if large and k in ['ss_datasets', 'prompt', 'ss_bucket_info', 'sd_metadata_file']:
+                    continue
+                if k in ['workflow']:
+                    res[k] = 'workflow'
+                    continue
+                if str(v) == 'NaN':
                     continue
                 if v[0:1] == '{':
                     try:
@@ -400,7 +408,14 @@ def read_metadata_from_safetensors(filename):
                             scrub_dict(v, ['sd_merge_recipe'])
                     except Exception:
                         pass
-                res[k] = v
+                if isinstance(v, dict):
+                    try:
+                        _tmp = json.dumps(v, indent=2, default=str, allow_nan=False, ensure_ascii=False)
+                    except Exception:
+                        # log.warning(f'Model metadata: file="{filename}" key="{k}" value="{v}" not serializable')
+                        continue
+                if v is not None:
+                    res[k] = v
     except Exception as e:
         log.error(f'Model metadata: file="{filename}" {e}')
         from modules import errors
@@ -414,7 +429,7 @@ def read_metadata_from_safetensors(filename):
     return res
 
 
-def scrub_dict(dict_obj, keys):
+def scrub_dict(dict_obj, keys: list[str]):
     for key in list(dict_obj.keys()):
         if not isinstance(dict_obj, dict):
             continue
@@ -432,6 +447,6 @@ def write_metadata():
     if sd_metadata_pending == 0:
         log.debug(f'Model metadata: file="{sd_metadata_file}" no changes')
         return
-    writefile(sd_metadata, sd_metadata_file)
-    log.info(f'Model metadata saved: file="{sd_metadata_file}" items={sd_metadata_pending} time={sd_metadata_timer:.2f}')
+    writefile(sd_metadata, sd_metadata_file, silent=True)
+    log.info(f'Model metadata: file="{sd_metadata_file}" added={sd_metadata_pending} time={sd_metadata_timer:.2f}')
     sd_metadata_pending = 0
