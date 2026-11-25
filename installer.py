@@ -1592,7 +1592,7 @@ def get_version(force=False):
             origin = origin.removesuffix('.git')
             version['url'] = origin + '/tree/' + branch_name
             version['branch'] = branch_name
-            if version['branch'] == 'HEAD':
+            if version['branch'] == 'HEAD' and not force: # a forced refresh re-reads the same checkout, warned about at startup
                 log.warning('Version: detached state detected')
         except Exception as e:
             log.warning(f'Version: where=branch {e}')
