@@ -80,6 +80,26 @@ This folder contains repo-local Copilot skills for recurring SD.Next tasks.
   File: `update-hints/SKILL.md`
   Use when scanning `modules/ui*.py`, `scripts/*.py`, and `ui/locale/locale_en.json` to create missing hints, detect duplicates, flag incorrect hints without auto-updating them, and generate a categorized audit report.
 
+- `sync-upstream`
+  File: `sync-upstream/SKILL.md`
+  Use when updating this fork from upstream `vladmandic/sdnext`: fetch and merge `master` (or `dev` on request), keep fork-local files, restore submodule pins instead of committing installer drift, verify startup, refresh fork-local guidance, and push to the working branch.
+
+- `perf-sandbox`
+  File: `perf-sandbox/SKILL.md`
+  Use when running SD.Next for measurements or patch tests: isolated git worktrees with their own submodules (`scripts/mkwt.sh`), one server per port (`scripts/run-app.sh`, `scripts/stop-app.sh`), an offline tiny test model (`scripts/make_tiny_sd.py`), and a bit-exact end-to-end generation check (`scripts/e2e.py`).
+
+- `perf-audit`
+  File: `perf-audit/SKILL.md`
+  Use when looking for performance problems: per-area measurement recipes, rules for measuring on a noisy machine, the finding format, and `workflow.js`, which runs one finder agent per subsystem.
+
+- `perf-patch`
+  File: `perf-patch/SKILL.md`
+  Use when turning a performance finding into a verified patch: builder protocol (reproduce, minimal patch, prove gain and equivalence) and reviewer protocol (try to break it), with `workflow.js` running both for groups of candidates.
+
+- `perf-land`
+  File: `perf-land/SKILL.md`
+  Use when applying reviewed performance patches as atomic commits: apply order, UI rebuild, lint, combined verification with the end-to-end check, commit messages, push, and reporting held or rejected candidates.
+
 ## Notes
 
 - Keep skills narrowly task-oriented and reusable.
