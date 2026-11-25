@@ -74,6 +74,7 @@ If an earlier attempt was cut off, its working copy (`wt/<id>`) and notes (`tmp/
 - Each group uses two ports: `port` for the builder, `port + 1` for the reviewer.
 - Concurrency per workflow is limited to CPUs minus two. On a 4-core, 16 GB machine run about four workflows at once; more agents mostly slow each other down.
 - The workflow returns, per group, the builder results and the reviewer results per candidate. Read `journal.jsonl` in the workflow's transcript folder if a result looks empty.
+- Progress and results at any time: `python .github/skills/perf-patch/status.py --args <args file> --journal <run folder> [--out STATUS.md]` prints one row per candidate (state, builder and reviewer verdicts, patch files, gain).
 - After a run, stop leftover servers with `stop-app.sh --all`.
 
 ## Output

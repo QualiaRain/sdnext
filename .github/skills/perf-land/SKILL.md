@@ -23,6 +23,7 @@ Turn accepted patches into one commit each on the working branch, verify the com
 
 1. Start clean. `git status --porcelain` must be empty. If the only changes are submodule pointers moved by the installer (a full-path launch fast-forwards them), restore the pins with `git submodule update --checkout <submodule paths>` instead of committing them.
 2. Choose the order: independent patches first, stacked parts (`.1`, `.2`) in order, `.v2` files instead of the originals when the reviewer corrected a patch.
+   Choose the granularity with the user: one commit per fix (easiest to cherry-pick upstream) or themed commits (one per area such as page load, startup, generation, installer). For a themed commit, apply and check each patch on its own first, then commit them together with a body that lists every change with its own measured effect.
 3. For each candidate:
    - `git apply --3way <patch>`; check `git diff --stat` lists only the intended files.
    - If `ui/*.ts` changed, rebuild with `pnpm run build:core` (Node 24 or newer) and include `ui/dist/sdnext.mjs` and its map in the same commit. Run `eslint:core` and `tsc:core`.
