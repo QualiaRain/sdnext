@@ -49,6 +49,7 @@ const el = {
 const cleanupTimers = {};
 const maintenanceTimers = {};
 const fetchQueue = [];
+const fetchQueueSignals = new WeakSet<AbortSignal>(); // signals that already have an abort listener for fetchQueue
 const icons = {
   Time: String.fromCodePoint(9201),
   Folder: String.fromCodePoint(128448), // or 128449;
@@ -318,6 +319,8 @@ class SimpleProgressBar {
   }
 
   hide() {
+    clearInterval(this.#interval); // a folder switch while loading must also stop the previous listing's timer
+    this.#interval = undefined;
     this.#container.style.display = 'none';
     this.#visible = false;
     this.#progress.style.width = '0';
@@ -476,17 +479,19 @@ async function awaitForOutstanding(signal) {
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   if (outstanding < maxFetchRequests) return; // if we are under the limit, proceed immediately
   await new Promise((resolve, reject) => { // otherwise, register a promise and wait for the queue to resolve us
-    const onResolve = () => { // define what happens when this item gets its turn or gets aborted
-      signal?.removeEventListener('abort', onAbort);
-      resolve(true);
-    };
-    const onAbort = () => {
-      const idx = fetchQueue.findIndex((item) => item.resolve === onResolve); // remove this specific request from the waiting queue if aborted
-      if (idx !== -1) fetchQueue.splice(idx, 1);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    fetchQueue.push({ resolve: onResolve });
-    signal?.addEventListener('abort', onAbort);
+    fetchQueue.push({ resolve, reject, signal });
+    if (!signal || fetchQueueSignals.has(signal)) return;
+    fetchQueueSignals.add(signal);
+    signal.addEventListener('abort', () => { // one listener per signal: remove all of its waiting requests in one pass and reject them in queue order
+      const aborted = [];
+      let kept = 0;
+      for (const item of fetchQueue) {
+        if (item.signal === signal) aborted.push(item);
+        else fetchQueue[kept++] = item;
+      }
+      fetchQueue.length = kept;
+      for (const item of aborted) item.reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
   });
 }
 
@@ -714,6 +719,15 @@ async function addSeparators() {
   // Only auto-open first separator if there are no root files to display
   let isFirstSeparator = !hasRootFiles;
 
+  // Count files per directory once
+  const dirCounts = new Map<string, number>();
+  for (const file of all) {
+    if (!file.name) continue;
+    const fileDir = file.name.match(/(.*)[/\\]/);
+    const fileDirPath = fileDir ? fileDir[1] : '';
+    dirCounts.set(fileDirPath, (dirCounts.get(fileDirPath) || 0) + 1);
+  }
+
   // First pass: create separators
   for (const f of all) {
     let dir = f.name?.match(/(.*)[/\\]/);
@@ -722,14 +736,7 @@ async function addSeparators() {
     if (dir !== lastDir) {
       lastDir = dir;
       if (dir.length > 0) {
-        // Count files in this directory
-        let fileCount = 0;
-        for (const file of all) {
-          if (!file.name) continue;
-          const fileDir = file.name.match(/(.*)[/\\]/);
-          const fileDirPath = fileDir ? fileDir[1] : '';
-          if (fileDirPath === dir) fileCount++;
-        }
+        const fileCount = dirCounts.get(dir) || 0;
 
         const sep = document.createElement('div');
         sep.className = 'gallery-separator';
@@ -1007,6 +1014,7 @@ export async function gallerySort(key) {
   }
 
   sortMode = gallerySorter[currentSort];
+  el.files.innerHTML = ''; // detach all nodes in one operation: moving attached nodes one by one is slow in large folders
 
   // Sort root files
   rootFiles.sort(sortMode.func);
@@ -1023,8 +1031,6 @@ export async function gallerySort(key) {
     files.forEach((node) => fragment.appendChild(node));
   }
 
-  if (fragment.children.length === 0) return;
-  el.files.innerHTML = '';
   el.files.appendChild(fragment);
   addSeparators();
 

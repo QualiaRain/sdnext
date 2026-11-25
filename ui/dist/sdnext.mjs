@@ -13255,6 +13255,7 @@ var el = {
 var cleanupTimers = {};
 var maintenanceTimers = {};
 var fetchQueue = [];
+var fetchQueueSignals = /* @__PURE__ */ new WeakSet();
 var icons = {
   Time: String.fromCodePoint(9201),
   Folder: String.fromCodePoint(128448),
@@ -13485,6 +13486,8 @@ var SimpleProgressBar = class {
     element.appendChild(this.#container);
   }
   hide() {
+    clearInterval(this.#interval);
+    this.#interval = void 0;
     this.#container.style.display = "none";
     this.#visible = false;
     this.#progress.style.width = "0";
@@ -13617,17 +13620,19 @@ async function awaitForOutstanding(signal) {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (outstanding < maxFetchRequests) return;
   await new Promise((resolve, reject) => {
-    const onResolve = () => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve(true);
-    };
-    const onAbort = () => {
-      const idx = fetchQueue.findIndex((item) => item.resolve === onResolve);
-      if (idx !== -1) fetchQueue.splice(idx, 1);
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    fetchQueue.push({ resolve: onResolve });
-    signal?.addEventListener("abort", onAbort);
+    fetchQueue.push({ resolve, reject, signal });
+    if (!signal || fetchQueueSignals.has(signal)) return;
+    fetchQueueSignals.add(signal);
+    signal.addEventListener("abort", () => {
+      const aborted = [];
+      let kept = 0;
+      for (const item of fetchQueue) {
+        if (item.signal === signal) aborted.push(item);
+        else fetchQueue[kept++] = item;
+      }
+      fetchQueue.length = kept;
+      for (const item of aborted) item.reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
   });
 }
 async function delayFetchThumb(fn, signal) {
@@ -13816,6 +13821,13 @@ async function addSeparators() {
   let lastDir;
   const hasRootFiles = all.some((f) => f.name && !f.name.match(/[/\\]/));
   let isFirstSeparator = !hasRootFiles;
+  const dirCounts = /* @__PURE__ */ new Map();
+  for (const file of all) {
+    if (!file.name) continue;
+    const fileDir = file.name.match(/(.*)[/\\]/);
+    const fileDirPath = fileDir ? fileDir[1] : "";
+    dirCounts.set(fileDirPath, (dirCounts.get(fileDirPath) || 0) + 1);
+  }
   for (const f of all) {
     let dir = f.name?.match(/(.*)[/\\]/);
     if (!dir) dir = "";
@@ -13823,13 +13835,7 @@ async function addSeparators() {
     if (dir !== lastDir) {
       lastDir = dir;
       if (dir.length > 0) {
-        let fileCount = 0;
-        for (const file of all) {
-          if (!file.name) continue;
-          const fileDir = file.name.match(/(.*)[/\\]/);
-          const fileDirPath = fileDir ? fileDir[1] : "";
-          if (fileDirPath === dir) fileCount++;
-        }
+        const fileCount = dirCounts.get(dir) || 0;
         const sep = document.createElement("div");
         sep.className = "gallery-separator";
         sep.title = dir;
@@ -14041,6 +14047,7 @@ async function gallerySort(key) {
     folderGroups.get(dir).push(file);
   }
   sortMode = gallerySorter[currentSort];
+  el.files.innerHTML = "";
   rootFiles.sort(sortMode.func);
   rootFiles.forEach((node) => fragment.appendChild(node));
   const folderNames = Array.from(folderGroups.keys());
@@ -14050,8 +14057,6 @@ async function gallerySort(key) {
     files.sort(sortMode.func);
     files.forEach((node) => fragment.appendChild(node));
   }
-  if (fragment.children.length === 0) return;
-  el.files.innerHTML = "";
   el.files.appendChild(fragment);
   addSeparators();
   const all = Array.from(el.files.children);
