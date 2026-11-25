@@ -107,6 +107,12 @@ class ExtraNetworksPageStyles(ui_extra_networks.ExtraNetworksPage):
         self.update_all_previews(items)
         return items
 
+    def create_html(self, item, tabname: str):
+        url = ui_extra_networks.embedded_preview_url(item.get('preview', None))
+        if url is not None: # card links the embedded preview instead of inlining it, the item keeps its data uri for the api and the details view
+            item = {**item, 'preview': url}
+        return super().create_html(item, tabname)
+
     def allowed_directories_for_previews(self):
         return [v for v in [shared.opts.styles_dir] if v is not None] + ['html']
 

@@ -10,11 +10,11 @@ def get_lora(lora: str) -> dict:
     return obj.__dict__
 
 
-def get_loras():
-    """List all available LoRA networks with name, alias, path, and metadata."""
+def get_loras(metadata: bool = True):
+    """List all available LoRA networks with name, alias, path, and metadata. Set metadata=false to return empty metadata and a much smaller response."""
     from modules.lora import network, lora_load
     def create_lora_json(obj: network.NetworkOnDisk):
-        return { "name": obj.name, "alias": obj.alias, "path": obj.filename, "metadata": obj.metadata }
+        return { "name": obj.name, "alias": obj.alias, "path": obj.filename, "metadata": obj.metadata if metadata else {} }
     return [create_lora_json(obj) for obj in lora_load.available_networks.values()]
 
 

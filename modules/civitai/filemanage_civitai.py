@@ -202,15 +202,22 @@ def hash_cache_path(title: str) -> str | None:
     return registry.get(name) if registry else None
 
 
-def hash_cache_stale(title: str) -> bool:
-    """True when the key's loader folder is reachable but the registry no longer lists the file, or lists a path that is gone."""
+def hash_cache_stale(title: str, registries: dict | None = None) -> bool:
+    """True when the key's loader folder is reachable but the registry no longer lists the file, or lists a path that is gone.
+    registries, when given, keeps each kind's registry between calls, so a scan over many keys builds it once."""
     kind, _, name = title.partition('/')
     if kind == 'vae' and os.path.isabs(name):
         return os.path.isdir(os.path.dirname(name)) and not os.path.exists(name)
     root = loader_root(kind)
     if not root or not os.path.isdir(root):
         return False
-    path = (loader_registry(kind) or {}).get(name)
+    if registries is None:
+        registry = loader_registry(kind)
+    else:
+        if kind not in registries:
+            registries[kind] = loader_registry(kind)
+        registry = registries[kind]
+    path = (registry or {}).get(name)
     return path is None or not os.path.exists(path)
 
 
@@ -221,7 +228,8 @@ def prune_hash_cache():
         return
     hash_cache_pruned = True
     from modules import hashes
-    gone = [title for title in list(hashes.cache()) if hash_cache_stale(title)]
+    registries = {}
+    gone = [title for title in list(hashes.cache()) if hash_cache_stale(title, registries)]
     for title in gone:
         hashes.cache().pop(title, None)
     if gone:

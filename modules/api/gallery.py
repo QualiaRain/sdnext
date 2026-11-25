@@ -1,9 +1,11 @@
 import io
 import os
 import time
+import asyncio
 import base64
 from secrets import compare_digest
 from urllib.parse import quote, unquote
+from anyio import CapacityLimiter, to_thread
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocket, WebSocketState
 from pydantic import BaseModel, Field # pylint: disable=no-name-in-module
@@ -70,6 +72,16 @@ class ConnectionManager:
     async def broadcast(self, data: str | dict | bytes):
         for ws in self.active:
             await self.send(ws, data)
+
+def listing_lines(folder: str, files):
+    """Yield one 'folder##F##file' line per file as split by ui/gallery.ts; folder quoting and path root are computed once per listing."""
+    prefix = quote(folder) + '##F##'
+    prefix = prefix[:1] + ":" + prefix[4:] if prefix[1:4] == "%3A" else prefix
+    root = os.path.join(os.path.abspath(folder), '')
+    n = len(root)
+    for f in files:
+        file = f[n:] if f.startswith(root) else os.path.relpath(f, folder) # files_cache paths are normalized and below abspath(folder), where the slice equals relpath
+        yield prefix + quote(file)
 
 ### api definitions
 
@@ -223,8 +235,7 @@ def register_api(api): # register api
         debug(f'Browser folders: {unique_folders}')
         return unique_folders
 
-    # @app.get("/sdapi/v1/browser/thumb", response_model=dict)
-    async def get_thumb(file: str, exif: bool = False):
+    def make_thumb(file: str, exif: bool = False):
         try:
             from modules.api import helpers
             fn = helpers.validate_path(file, shared.demo.allowed_paths)
@@ -237,6 +248,15 @@ def register_api(api): # register api
             content = { 'error': str(e) }
             return JSONResponse(content=content)
 
+    thumb_limiter: CapacityLimiter | None = None
+
+    # @app.get("/sdapi/v1/browser/thumb", response_model=dict)
+    async def get_thumb(file: str, exif: bool = False):
+        nonlocal thumb_limiter
+        if thumb_limiter is None: # created inside the event loop: older anyio cannot create one outside it
+            thumb_limiter = CapacityLimiter(min(4, max(1, (os.cpu_count() or 1) // 2))) # decode off the event loop on at most half the cores: bounds memory with large images and leaves cpu for generation
+        return await to_thread.run_sync(make_thumb, file, exif, limiter=thumb_limiter)
+
     # @app.get("/sdapi/v1/browser/files", response_model=list)
     async def ht_files(folder: str):
         try:
@@ -244,12 +264,7 @@ def register_api(api): # register api
             from modules.api import helpers
             folder = helpers.validate_path(folder, allowed_folder=True)
             files = files_cache.directory_files(folder, recursive=True)
-            lines = []
-            for f in files:
-                file = os.path.relpath(f, folder)
-                msg = quote(folder) + '##F##' + quote(file)
-                msg = msg[:1] + ":" + msg[4:] if msg[1:4] == "%3A" else msg
-                lines.append(msg)
+            lines = list(listing_lines(folder, files))
             t1 = time.time()
             log.debug(f'Gallery: type=ht folder="{folder}" files={len(lines)} time={t1-t0:.3f}')
             return lines
@@ -273,15 +288,13 @@ def register_api(api): # register api
             folder = unquote(folder).replace('%3A', ':')
             t0 = time.time()
             numFiles = 0
-            files = files_cache.list_files(folder, recursive=True)
-            # files = list(files_cache.directory_files(folder, recursive=True))
+            files = list(files_cache.list_files(folder, recursive=True)) # snapshot: the loop below yields and cached file lists can be refreshed meanwhile
             # files.sort(key=os.path.getmtime)
-            for f in files:
+            for msg in listing_lines(folder, files):
                 numFiles += 1
-                file = os.path.relpath(f, folder)
-                msg = quote(folder) + '##F##' + quote(file)
-                msg = msg[:1] + ":" + msg[4:] if msg[1:4] == "%3A" else msg
                 await manager.send(ws, msg)
+                if numFiles % 100 == 0:
+                    await asyncio.sleep(0) # let other requests run during long listings
             await manager.send(ws, '#END#')
             t1 = time.time()
             log.debug(f'Gallery: type=ws folder="{folder}" files={numFiles} time={t1-t0:.3f}')

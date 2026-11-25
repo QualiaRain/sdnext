@@ -7,6 +7,7 @@ import time
 import json
 import html
 import base64
+import hashlib
 import urllib.parse
 import threading
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from html.parser import HTMLParser
 from collections import OrderedDict
 import gradio as gr
 from PIL import Image
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from modules import paths, shared, devices, files_cache, errors, infotext, ui_symbols, ui_components, modelstats
 from modules.logger import log
 from modules.json_helpers import writefile
@@ -22,6 +23,7 @@ from modules.json_helpers import writefile
 
 allowed_dirs = []
 refresh_time = 0
+clone_pages = {} # txt2img page components by page name, other tabs copy them in the browser
 extra_pages = shared.extra_networks
 debug = log.trace if os.environ.get('SD_EN_DEBUG', None) is not None else lambda *args, **kwargs: None
 
@@ -51,6 +53,21 @@ card_list = '''
     </div>
 '''
 preview_map = None
+embedded_previews = {} # key -> base64 image data uri, served by /sdapi/v1/network/preview instead of being inlined in the page html
+embedded_types = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/bmp']
+
+
+def embedded_preview_url(preview: str | None):
+    # url for a base64 raster data uri; key is a content hash so the url changes whenever the image does
+    if not isinstance(preview, str) or not preview.startswith('data:'):
+        return None
+    header, _sep, payload = preview.partition(',')
+    params = [p.strip().lower() for p in header[5:].split(';')]
+    if params[0] not in embedded_types or 'base64' not in params[1:] or len(payload) == 0:
+        return None
+    key = hashlib.sha256(preview.encode()).hexdigest()[:16]
+    embedded_previews[key] = preview
+    return f"{shared.opts.subpath}/sdapi/v1/network/preview?key={key}"
 
 
 def init_api():
@@ -69,6 +86,17 @@ def init_api():
         if os.path.splitext(fn)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
             return JSONResponse({"error": f"file {fn}: not an image file"}, status_code=403)
         return FileResponse(fn, headers={"Accept-Ranges": "bytes"})
+
+    def get_preview(key: str = ""):
+        preview = embedded_previews.get(key, None)
+        if preview is not None:
+            header, _sep, payload = preview.partition(',')
+            try:
+                content = base64.b64decode(urllib.parse.unquote_to_bytes(payload) + b'==') # browsers accept unpadded base64, extra padding is ignored
+                return Response(content=content, media_type=header[5:].split(';')[0].strip().lower(), headers={"Cache-Control": "max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+            except Exception as e:
+                debug(f'EN preview: key={key} {e}')
+        return FileResponse('ui/assets/missing.png', headers={"Cache-Control": "no-cache"})
 
     def get_metadata(page: str = "", item: str = ""):
         page_dict = next(iter([x for x in shared.extra_networks if x.name.lower() == page.lower()]), None)
@@ -118,6 +146,7 @@ def init_api():
 
     shared.api.add_api_route("/sdapi/v1/network", get_network, methods=["GET"])
     shared.api.add_api_route("/sdapi/v1/network/thumb", get_thumb, methods=["GET"], auth=False)
+    shared.api.add_api_route("/sdapi/v1/network/preview", get_preview, methods=["GET"], auth=False)
     shared.api.add_api_route("/sdapi/v1/network/metadata", get_metadata, methods=["GET"])
     shared.api.add_api_route("/sdapi/v1/network/info", get_info, methods=["GET"])
     shared.api.add_api_route("/sdapi/v1/network/desc", get_desc, methods=["GET"])
@@ -519,7 +548,9 @@ class ExtraNetworksPage:
         possible_paths = list(set([os.path.dirname(item['filename']) for item in items] + [reference_path]))
         exts = ["jpg", "jpeg", "png", "webp", "tiff", "jp2", "jxl"]
         all_previews = list(files_cache.list_files(*possible_paths, ext_filter=exts, recursive=False))
-        all_previews_fn = [os.path.basename(x) for x in all_previews]
+        all_previews_fn = {} # basename -> index of its first occurrence in all_previews
+        for i, fn in enumerate(all_previews):
+            all_previews_fn.setdefault(os.path.basename(fn), i)
         for item in items:
             if item.get('preview', None) is not None and 'missing.png' not in item.get('preview', 'missing.png'):
                 continue
@@ -541,7 +572,7 @@ class ExtraNetworksPage:
             base = os.path.basename(base)
             for file in [f'{base}{mid}{ext}' for ext in exts for mid in ['.thumb.', '.', '.preview.']]:
                 if file in all_previews_fn:
-                    file_idx = all_previews_fn.index(os.path.basename(file))
+                    file_idx = all_previews_fn[os.path.basename(file)]
                     if '.thumb.' not in file:
                         self.missing_thumbs.append(all_previews[file_idx])
                     item['preview'] = self.link_preview(all_previews[file_idx])
@@ -610,6 +641,7 @@ class ExtraNetworksPage:
 
 def initialize():
     shared.extra_networks.clear()
+    clone_pages.clear()
 
 
 def register_page(page: ExtraNetworksPage):
@@ -818,17 +850,34 @@ def create_ui(container, button_parent: gr.Button, tabname: str, skip_indexing =
         if ui.tabname == 'txt2img': # refresh only once
             global refresh_time # pylint: disable=global-statement
             refresh_time = time.time()
+            clone_pages.clear()
         if not skip_indexing:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=shared.max_workers) as executor:
                 for page in get_pages():
                     executor.submit(page.create_items, ui.tabname)
+        clone_src, clone_dst = [], []
         for page in get_pages():
             page.create_page(ui.tabname, skip_indexing)
             with gr.Tab(page.title, id=page.title.lower().replace(" ", "_"), elem_classes="extra-networks-tab") as tab:
                 page_html = gr.HTML(page.patch(page.html, tabname), elem_id=f'{tabname}{page.name}_extra_page', elem_classes="extra-networks-page")
                 ui.pages.append(page_html)
                 tab.select(ui_tab_change, _js="getENActivePage", inputs=[ui.button_details], outputs=[ui.button_scan, ui.button_save, ui.button_model])
+            if ui.tabname == 'txt2img':
+                clone_pages[page.name] = page_html
+            elif (src := clone_pages.get(page.name)) is not None and len(page_html.value) > 0 and page_html.value == src.value.replace('~tabname', tabname).replace('txt2img', tabname):
+                clone_src.append(src)
+                clone_dst.append(page_html)
+        if len(clone_dst) > 0: # same html as txt2img except for the tab name: ship it once and let the browser copy it on load
+            tab_js = json.dumps(tabname)
+            js = f"(...pages) => pages.slice(0, {len(clone_dst)}).map((html) => html.replaceAll('~tabname', () => {tab_js}).replaceAll('txt2img', () => {tab_js}))"
+            try:
+                from gradio.context import Context
+                Context.root_block.load(fn=None, _js=js, inputs=clone_src, outputs=clone_dst, queue=False, show_progress='hidden')
+                for page_html in clone_dst:
+                    page_html.value = ''
+            except Exception as e:
+                log.debug(f'Networks: clone pages tab={tabname} {e}')
 
     def fn_save_img(image):
         if ui.last_item is None or ui.last_item.local_preview is None:

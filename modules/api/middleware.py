@@ -7,6 +7,8 @@ import anyio
 import starlette
 import uvicorn
 import fastapi
+from starlette.datastructures import Headers
+from starlette.middleware.gzip import GZipMiddleware as StarletteGZipMiddleware
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from fastapi import FastAPI, Request, Response
@@ -55,6 +57,27 @@ class LoopInstrumentorMiddleware:
         await self.app(scope, receive, send)
 
 
+class GZipMiddleware(StarletteGZipMiddleware):
+    """Starlette GZipMiddleware that sends already compressed media as is: gzip saves at most 1% on them, blocks the event loop and drops content-length"""
+    passthrough_types = ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm')
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
+
+        async def app(scope, receive, send_gzip): # runs inside the stock middleware, which compresses what reaches send_gzip
+            target = send_gzip
+            async def send_response(message):
+                nonlocal target
+                if message['type'] == 'http.response.start' and Headers(raw=message.get('headers', [])).get('content-type', '').partition(';')[0].strip().lower() in self.passthrough_types:
+                    target = send
+                await target(message)
+            await self.app(scope, receive, send_response)
+
+        await StarletteGZipMiddleware(app, self.minimum_size, self.compresslevel)(scope, receive, send)
+
+
 def setup_logging(debug: bool = False):
     level = logging.DEBUG if debug else logging.WARNING
     logging.getLogger("httpcore").setLevel(level)
@@ -74,10 +97,9 @@ def setup_logging(debug: bool = False):
 def setup_middleware(app: FastAPI, cmd_opts):
     ssl._create_default_https_context = ssl._create_unverified_context # pylint: disable=protected-access
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.middleware.gzip import GZipMiddleware
     app.user_middleware = [x for x in app.user_middleware if x.cls.__name__ != 'CORSMiddleware']
     app.middleware_stack = None # reset current middleware to allow modifying user provided list
-    app.add_middleware(GZipMiddleware, minimum_size=2048)
+    app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=6) # zlib default: level 9 costs about 60% more CPU for 0.5% smaller pages
     if cmd_opts.profile:
         app.add_middleware(LoopInstrumentorMiddleware)
     origins = [x.strip() for x in (cmd_opts.cors_origins or '').split(',') if x.strip()] # starlette compares origins verbatim

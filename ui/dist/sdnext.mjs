@@ -14891,7 +14891,7 @@ var xnEngine = {
     }
   },
   async loadAll() {
-    const loraData = await this.fetchJson("/loras");
+    const loraData = await this.fetchJson("/loras?metadata=false");
     if (Array.isArray(loraData)) {
       const items = [];
       for (const lo of loraData) {

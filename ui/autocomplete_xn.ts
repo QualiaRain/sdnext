@@ -97,8 +97,8 @@ export const xnEngine: XnEngine = {
   },
 
   async loadAll() {
-    // LoRAs: [{name, alias, path, metadata}, ...]
-    const loraData = await this.fetchJson('/loras');
+    // LoRAs: [{name, alias, path, metadata}, ...]; only name and alias are read, so metadata is not requested
+    const loraData = await this.fetchJson('/loras?metadata=false');
     if (Array.isArray(loraData)) {
       const items: XnItem[] = [];
       for (const lo of loraData) {

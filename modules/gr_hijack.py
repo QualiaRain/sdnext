@@ -204,6 +204,7 @@ def patch_gradio():
     except Exception:
         log.error(f'Gradio patch: version={gradio.__version__} make_temp_copy_if_needed not found')
         orig_make_temp_copy_if_needed = None
+    orig_get_api_info = getattr(gradio.blocks, 'get_api_info', None) if gradio.__version__.startswith('3.43') else None # wrapper below relies on gradio 3.43 internals
 
     async def wrap_cancel_tasks(task_ids: set[str]):
         log.error(f'Gradio cancel: task={task_ids}')
@@ -269,6 +270,25 @@ def patch_gradio():
                 return file_path
             raise
 
+    def wrap_get_api_info(config: dict, serialize: bool = True):
+        # original looks up every event input and output by scanning all components, quadratic in ui size
+        # same result from calling it once per event with only the components that event uses
+        try:
+            components = {}
+            for component in config['components']:
+                components.setdefault(component['id'], component) # first match wins as in the original scan
+            api_info = {'named_endpoints': {}, 'unnamed_endpoints': {}}
+            for i, dependency in enumerate(config['dependencies']):
+                ids = dict.fromkeys([*dependency['inputs'], *dependency['outputs']])
+                info = orig_get_api_info({**config, 'components': [components[c] for c in ids if c in components], 'dependencies': [dependency]}, serialize)
+                api_info['named_endpoints'].update(info['named_endpoints'])
+                if '0' in info['unnamed_endpoints']: # original keys unnamed endpoints by event index
+                    api_info['unnamed_endpoints'][str(i)] = info['unnamed_endpoints']['0']
+            return api_info
+        except Exception as e:
+            log.warning(f'Gradio api info: error="{e}" fallback=original')
+            return orig_get_api_info(config, serialize)
+
     if orig_call_prediction is not None:
         gradio.queueing.Queue.call_prediction = wrap_call_prediction
     if orig_restore_session_state is not None:
@@ -279,6 +299,8 @@ def patch_gradio():
         gradio.blocks.Blocks.preprocess_data = wrap_blocks_preprocess_data
     if orig_make_temp_copy_if_needed is not None:
         gradio.components.IOComponent.make_temp_copy_if_needed = wrap_make_temp_copy_if_needed
+    if orig_get_api_info is not None:
+        gradio.blocks.get_api_info = wrap_get_api_info
 
 
 def patch_gradio_future():

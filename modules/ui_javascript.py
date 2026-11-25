@@ -132,19 +132,34 @@ def reload_javascript():
     css = html_css(css_files)
     body = html_body()
 
-    def template_response(*args, **kwargs):
-        res = shared.GradioTemplateResponseOriginal(*args, **kwargs)
-        res.body = res.body.replace(b'<head>', f'<head>{title}'.encode())
-        res.body = res.body.replace(b'</head>', f'{manifest}</head>'.encode())
-        res.body = res.body.replace(b'</head>', f'{login}</head>'.encode())
-        res.body = res.body.replace(b'</head>', f'{js}</head>'.encode())
-        res.body = res.body.replace(b'</body>', f'{css}{body}</body>'.encode())
-        lines = res.body.decode("utf8").split('\n')
+    def edit_page(page: bytes) -> bytes:
+        page = page.replace(b'<head>', f'<head>{title}'.encode())
+        page = page.replace(b'</head>', f'{manifest}</head>'.encode())
+        page = page.replace(b'</head>', f'{login}</head>'.encode())
+        page = page.replace(b'</head>', f'{js}</head>'.encode())
+        page = page.replace(b'</body>', f'{css}{body}</body>'.encode())
+        lines = page.decode("utf8").split('\n')
         for line in lines:
             if 'meta name="twitter:' in line:
-                res.body = res.body.replace(line.encode("utf8"), b'')
+                page = page.replace(line.encode("utf8"), b'')
             if 'iframeResizer.contentWindow' in line:
-                res.body = res.body.replace(line.encode("utf8"), b'src="file=ui/js/iframeResizer.js"')
+                page = page.replace(line.encode("utf8"), b'src="file=ui/js/iframeResizer.js"')
+        return page
+
+    def edit_page_around_config(page: bytes) -> bytes | None:
+        # the inline gradio_config script is nearly the whole page: when it holds nothing the edits can match, edit the page with a unique stand-in for it and splice it back
+        start = page.find(b'window.gradio_config')
+        end = page.find(b'</script>', start) if start >= 0 else -1
+        if end < 0 or any(page.find(text, start, end) >= 0 for text in (b'<', b'\n', b'meta name="twitter:', b'iframeResizer.contentWindow')):
+            return None
+        stand_in = f'window.gradio_config_{os.urandom(8).hex()}'.encode()
+        parts = edit_page(page[:start] + stand_in + page[end:]).split(stand_in)
+        return b''.join((parts[0], memoryview(page)[start:end], parts[1])) if len(parts) == 2 else None
+
+    def template_response(*args, **kwargs):
+        res = shared.GradioTemplateResponseOriginal(*args, **kwargs)
+        page = edit_page_around_config(res.body)
+        res.body = page if page is not None else edit_page(res.body)
         res.init_headers()
         return res
 
