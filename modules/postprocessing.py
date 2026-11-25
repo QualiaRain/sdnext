@@ -30,7 +30,8 @@ def run_postprocessing(extras_mode,
                     ext = None
                 else:
                     try:
-                        image = Image.open(os.path.abspath(img.name))
+                        image = os.path.abspath(img.name)
+                        Image.open(image).close() # validate only: reopened when processed, one open file at a time
                     except Exception as e:
                         log.error(f'Failed to open image: file="{img.name}" {e}')
                         continue
@@ -45,11 +46,11 @@ def run_postprocessing(extras_mode,
             for filename in image_list:
                 fn = os.path.join(input_dir, filename)
                 try:
-                    image = Image.open(fn)
+                    Image.open(fn).close() # validate only: reopened when processed, one open file at a time
                 except Exception as e:
                     log.error(f'Failed to open image: file="{fn}" {e}')
                     continue
-                image_data.append(image)
+                image_data.append(fn)
                 image_names.append(fn)
                 image_ext.append(None)
             log.debug(f'Process: mode=folder inputs={input_dir} files={len(image_list)} images={len(image_data)}')
@@ -143,7 +144,9 @@ def run_postprocessing(extras_mode,
         outputs = []
     else:
         try:
-            outputs, info, params = process_images()
+            from modules.rembg import session_scope
+            with session_scope(): # background removal reuses one model session for the whole run
+                outputs, info, params = process_images()
         except Exception as e:
             log.error(f'Process: mode=image {e}')
             errors.display(e, 'postprocessing image')

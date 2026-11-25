@@ -98,6 +98,7 @@ class ScriptPostprocessingRembg(scripts_postprocessing.ScriptPostprocessing):
         else:
             try:
                 import rembg
+                from modules.rembg import get_session
                 if "U2NET_HOME" not in os.environ:
                     from modules.paths import models_path
                     os.environ["U2NET_HOME"] = os.path.join(models_path, "Rembg")
@@ -107,7 +108,7 @@ class ScriptPostprocessingRembg(scripts_postprocessing.ScriptPostprocessing):
                                     alpha_matting_foreground_threshold=alpha_matting_foreground_threshold,
                                     alpha_matting_background_threshold=alpha_matting_background_threshold,
                                     alpha_matting_erode_size=alpha_matting_erode_size,
-                                    session=rembg.new_session(model))
+                                    session=get_session(model))
             except Exception as e:
                 log.error(f'RemoveBackground: model={model} {e}')
                 errors.display(e, f'Rembg model={model}')
