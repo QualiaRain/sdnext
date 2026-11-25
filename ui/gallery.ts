@@ -345,7 +345,8 @@ class SimpleProgressBar {
       debug('gallery: thumbnail stats', this.stats);
       this.stats = { ...this.defaultStats };
     }
-    setTimeout(() => this.hide(), 100);
+    const interval = this.#interval;
+    setTimeout(() => { if (this.#interval === interval) this.hide(); }, 100); // skip if a new listing started meanwhile: hide() would stop its timer
   }
 }
 

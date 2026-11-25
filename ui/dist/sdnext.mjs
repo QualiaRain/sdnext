@@ -13514,7 +13514,10 @@ var SimpleProgressBar = class {
       debug("gallery: thumbnail stats", this.stats);
       this.stats = { ...this.defaultStats };
     }
-    setTimeout(() => this.hide(), 100);
+    const interval = this.#interval;
+    setTimeout(() => {
+      if (this.#interval === interval) this.hide();
+    }, 100);
   }
 };
 var pb = new SimpleProgressBar(galleryHashes);
