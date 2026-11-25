@@ -34,13 +34,18 @@ def prompt_compatible(pipe = None):
     return True
 
 
-def prepare_model(pipe = None):
+def select_model(pipe = None): # the pipeline that holds the text encoders, without side effects
     pipe = pipe or shared.sd_model
     if not hasattr(pipe, "text_encoder") and hasattr(shared.sd_model, "pipe"):
         pipe = pipe.pipe
     if not hasattr(pipe, "text_encoder"):
         return None
-    elif hasattr(pipe, "maybe_free_model_hooks"):
+    return pipe
+
+
+def prepare_model(pipe = None):
+    pipe = select_model(pipe)
+    if pipe is not None and hasattr(pipe, "maybe_free_model_hooks"):
         pipe.maybe_free_model_hooks()
         devices.torch_gc()
     return pipe
@@ -85,6 +90,7 @@ class PromptEmbedder:
             return
         earlyout = self.checkcache(p)
         if earlyout:
+            self.pipe = select_model(shared.sd_model) # __call__ needs it to pad a batch whose prompts encode to different lengths
             return
         self.pipe = prepare_model(shared.sd_model)
         if self.pipe is None:
@@ -131,7 +137,8 @@ class PromptEmbedder:
         en_data = p.network_data
         en_data = [idx.items for item in en_data.values() for idx in item]
         effective_batch = 1 if self.allsame else self.batchsize
-        key = str([self.prompts, self.negative_prompts, effective_batch, self.clip_skip, self.steps, en_data])
+        steps = self.steps if any(isinstance(x, str) and '[' in x for x in [*self.prompts, *self.negative_prompts]) else None # only '[' can schedule, so other prompts encode the same at any step count, such as the hires pass
+        key = str([self.prompts, self.negative_prompts, effective_batch, self.clip_skip, steps, en_data, self.prompt_mean_norm, self.diffusers_zeros_prompt_pad, self.te_pooled_embeds])
         item = cache.get(key)
         if not item:
             if not any(flatten(emb) for emb in [self.prompt_embeds,

@@ -193,6 +193,7 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
     lora_diffusers.diffuser_loaded.clear()
     lora_diffusers.diffuser_scales.clear()
     t0 = time.time()
+    templated = set() # names whose network this request clones from the template cache
 
     for i, (network_on_disk, name) in enumerate(zip(networks_on_disk, names, strict=False)):
         net = None
@@ -212,6 +213,7 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
                     pass # handled directly from extra_networks_lora.load_nunchaku
                 else:
                     net = load_safetensors(name, network_on_disk)
+                    templated.add(name)
                 if net is not None:
                     net.mentioned_name = name
                     repeat = names[:i].count(name)
@@ -240,8 +242,11 @@ def network_load(names, te_multipliers=None, unet_multipliers=None, dyn_dims=Non
         }
         l.loaded_networks.append(net)
 
-    while len(lora_cache) > shared.opts.lora_in_memory_limit:
-        name = next(iter(lora_cache))
+    # a loaded clone shares its template's tensors, so trimming the template frees nothing and only makes the next generation read the file again
+    in_use = templated.intersection(n.mentioned_name for n in l.loaded_networks) if shared.opts.lora_in_memory_limit > 0 and not shared.opts.lora_force_reload else set()
+    for name in [name for name in lora_cache if name not in in_use]:
+        if len(lora_cache) <= shared.opts.lora_in_memory_limit:
+            break
         lora_cache.pop(name, None)
 
     if not skip_lora_load and len(lora_diffusers.diffuser_loaded) > 0:
