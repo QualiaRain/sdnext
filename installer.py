@@ -1840,8 +1840,10 @@ def update_wiki():
 
 @lru_cache
 def get_state():
+    # on master/main register_sdnq checks out sdnq_target after the state is saved, so record that target instead of the commit sdnq happens to be at
+    sdnq_locked = version.get('branch', 'unknown') in ['master', 'main'] and os.path.exists(os.path.join('extensions-builtin', 'sdnq', '.git'))
     state = {
-        'version': version,
+        'version': {**version, 'sdnq': f'main@{sdnq_target[:8]}'} if sdnq_locked else version,
         'torch': os.environ.get('TORCH_COMMAND', 'unknown'),
         'python': sys.version,
         'platform': sys.platform,
@@ -1878,7 +1880,7 @@ def get_state():
         with ThreadPoolExecutor(max_workers=min(len(ext_dirs), 8), thread_name_prefix='sdnext-git') as pool:
             for ext, commit in pool.map(_get_commit, ext_dirs):
                 if commit:
-                    state['extensions'][ext] = commit
+                    state['extensions'][ext] = sdnq_target if (sdnq_locked and ext == 'sdnq') else commit
     except Exception:
         pass
     return state
@@ -1899,6 +1901,13 @@ def check_state():
 
 def update_state():
     try:
+        if not args.upgrade and not args.skip_git: # the full path moved submodules and extensions after get_state() was cached at startup
+            previous = version.copy()
+            get_version(force=True)
+            if version['commit'] == previous['commit']:
+                get_state.cache_clear() # save what this run left behind, so the next start can take the quick path
+            else:
+                version.update(previous) # main repo moved under the running code: keep the startup state so the next start repeats the full path
         state = get_state()
         if not os.path.exists('data'):
             os.makedirs('data')
