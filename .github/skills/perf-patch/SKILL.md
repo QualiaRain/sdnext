@@ -50,11 +50,11 @@ Verdicts: `patch` (safe and measured), `needs-decision` (the worthwhile variant 
 
 ## Resuming Interrupted Work
 
-If an earlier attempt was cut off, its working copy (`wt/<id>`) and notes (`tmp/agents/<id>/`) may still exist. Look at them (`git -C <copy> diff`, scripts, notes) and reuse what holds up, but re-verify every claim yourself. Servers left running by a dead agent can be stopped with `stop-app.sh --all` or by their pid files.
+If an earlier attempt was cut off, its working copy (`wt/<id>`) and notes (`tmp/agents/<id>/`) may still exist. Look at them (`git -C <copy> diff`, scripts, notes) and reuse what holds up, but re-verify every claim yourself. Stop a server left by a dead agent only in copies named after your own candidates, with `stop-app.sh <copy> <port>` for each `<copy>/tmp/server-<port>.pid`; other agents may be measuring with theirs.
 
 ## Running At Scale
 
-`workflow.js` in this folder runs builder then reviewer for each group of candidates, as a pipeline (a group's review starts as soon as its build finishes). Run it with the Workflow tool:
+Any agent can do this by hand: per group of candidates, start a builder sub-agent with the builder protocol above, then a separate reviewer sub-agent with the reviewer protocol, and collect both results (`workflow.js` in this folder holds the exact prompts and result schemas used in practice). Agent runtimes that run JavaScript orchestration scripts with `agent()`, `pipeline()` and `args` globals (for example the Workflow tool in Claude Code) can run `workflow.js` directly; it runs builder then reviewer per group as a pipeline, so a group's review starts as soon as its build finishes:
 
 - `scriptPath`: absolute path of `.github/skills/perf-patch/workflow.js`
 - `args`:
@@ -72,10 +72,10 @@ If an earlier attempt was cut off, its working copy (`wt/<id>`) and notes (`tmp/
 
 - Group candidates that share code and context (same file or subsystem): one builder builds a separate patch per candidate, each in its own copy against the same base. This saves agent start-up and server launches.
 - Each group uses two ports: `port` for the builder, `port + 1` for the reviewer.
-- Concurrency per workflow is limited to CPUs minus two. On a 4-core, 16 GB machine run about four workflows at once; more agents mostly slow each other down.
-- The workflow returns, per group, the builder results and the reviewer results per candidate. Read `journal.jsonl` in the workflow's transcript folder if a result looks empty.
-- Progress and results at any time: `python .github/skills/perf-patch/status.py --args <args file> --journal <run folder> [--out STATUS.md]` prints one row per candidate (state, builder and reviewer verdicts, patch files, gain).
-- After a run, stop leftover servers with `stop-app.sh --all`.
+- Keep the number of agents running at once within the machine's means. On a 4-core, 16 GB machine about eight is the limit (four Claude Code workflows, each capped at CPUs minus two); more agents mostly slow each other down.
+- The workflow returns, per group, the builder results and the reviewer results per candidate. In Claude Code, read `journal.jsonl` in the workflow's transcript folder if a result looks empty.
+- Progress and results at any time, for Claude Code workflow runs (it reads their journal files): `python .github/skills/perf-patch/status.py --args <args file> --journal <run folder> [--out STATUS.md]` prints one row per candidate (state, builder and reviewer verdicts, patch files, gain).
+- After every run on the machine has finished, stop leftover servers with `stop-app.sh --all`.
 
 ## Output
 

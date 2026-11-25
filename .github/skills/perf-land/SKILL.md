@@ -42,7 +42,7 @@ Turn accepted patches into one commit each on the working branch, verify the com
 
 ## Upstreaming
 
-Branches meant for upstream pull requests are cut from upstream `dev`, never from the fork branch. Cherry-pick the commits, resolve against `dev`, and repeat steps 3 and 4 there, since `dev` differs. Read `.github/skills/ai-disclosure/SKILL.md` in full before preparing any upstream-facing text; CLAUDE.md makes that mandatory.
+Branches meant for upstream pull requests are cut from upstream `dev`, never from the fork branch, and carry one change each (CONTRIBUTING asks for one clear change per contribution). A themed commit is not sent as is: rebuild each of its changes on its own branch from the reviewed patch file, or split the commit, resolve against `dev`, and repeat steps 3 and 4 there, since `dev` differs. Changes that alter the data flow between Gradio and the frontend need the maintainers' agreement first (rule 1 of `.github/instructions/ui.instructions.md`): say so in the pull request text. Read `.github/skills/ai-disclosure/SKILL.md` in full before preparing any upstream-facing text; CLAUDE.md makes that mandatory. If that file is missing, stop and ask the user before writing any upstream-facing text.
 
 ## Output
 

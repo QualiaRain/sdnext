@@ -8,8 +8,10 @@ export const meta = {
   ],
 }
 
-// args: { root, findingsDir, patchesDir?, base?, e2eRef?, notes?, groups: [{ id, port, tier, note?, candidates: [{ id, title, findings: [ids], extra }] }] }
-const ROOT = args.root || '/home/user/sdnext'
+// args: { root (required), findingsDir, patchesDir?, base?, e2eRef?, notes?, wtRoot? (default <root>/../wt), groups: [{ id, port, tier, note?, candidates: [{ id, title, findings: [ids], extra }] }] }
+if (!args || !args.root) throw new Error('args.root (absolute path of the main checkout) is required')
+const ROOT = args.root
+const WT_ROOT = args.wtRoot || ROOT + '/../wt' // where mkwt.sh puts copies; set it when SD_WT_ROOT is set
 const FINDINGS = args.findingsDir || ROOT + '/tmp/perf/findings'
 const PATCHES = args.patchesDir || ROOT + '/tmp/perf/patches'
 const SCRIPTS = ROOT + '/.github/skills/perf-sandbox/scripts'
@@ -22,7 +24,7 @@ SD.Next performance pass. Main checkout: ${ROOT} (read-only for you, except that
 Read first, in full: ${ROOT}/.github/skills/perf-patch/SKILL.md (your protocol, verdicts, patch rules), ${ROOT}/.github/skills/perf-sandbox/SKILL.md (working copies, servers, end-to-end check, shared-machine rules) and the "Measuring On A Noisy Machine" section of ${ROOT}/.github/skills/perf-audit/SKILL.md.
 
 Tools: working copies with: ${MKWT} <name>   servers with: bash ${SCRIPTS}/run-app.sh <copy> <port> [args] and bash ${SCRIPTS}/stop-app.sh <copy> <port>   end-to-end check: ${ROOT}/venv/bin/python ${SCRIPTS}/e2e.py --url http://127.0.0.1:<port> --runs 1 ${args.e2eRef ? '--compare ' + args.e2eRef : '(create a reference from an unpatched copy first)'}
-Python is ${ROOT}/venv/bin/python; ruff, pylint and py-spy are in the same folder.
+Python is ${ROOT}/venv/bin/python; ruff and pylint are in the same folder, and py-spy too if it was installed (perf-sandbox, one-time setup).
 ${args.notes ? '\nMACHINE AND RUN NOTES\n' + args.notes + '\n' : ''}`
 
 const PER_CANDIDATE_BUILD = {
@@ -93,7 +95,7 @@ Candidates (handle each one separately; each gets its own verdict and its own pa
 ${g.candidates.map(candidateBlock).join('\n')}
 
 The finders' scratch scripts are under ${ROOT}/tmp/agents/<scope>/ (scope = the report name before its number). Their numbers are claims, not facts.
-If an earlier attempt was interrupted, follow "Resuming Interrupted Work" in the perf-patch skill: check ${ROOT}/../wt/<candidate id>* and ${ROOT}/tmp/agents/<candidate id>/.
+If an earlier attempt was interrupted, follow "Resuming Interrupted Work" in the perf-patch skill: check ${WT_ROOT}/<candidate id>* and ${ROOT}/tmp/agents/<candidate id>/.
 
 Follow the builder protocol. Scale the effort to the candidate: for a small, mechanical one, a focused benchmark, an equivalence check, lint and one app start are enough; for a large one be thorough, the reviewer will look for what you skipped. Patch files go to ${PATCHES}/<candidate id>.diff (or .1.diff/.2.diff when stacked). Stop your servers before returning.
 

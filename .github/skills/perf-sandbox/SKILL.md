@@ -24,12 +24,13 @@ Run the real app from throwaway copies of the repository, so that measurements, 
 
 Run from the main checkout root.
 
-1. Python environment: the first `./webui.sh --uv --test` creates `venv/` and installs everything (add `-f` when running as root). Do not install project dependencies by hand.
+1. Python environment: the first `./webui.sh --uv --test` creates `venv/` and installs everything. As root the flag goes first: `./webui.sh -f --uv --test` (webui.sh stops reading its own flags at the first one it does not know). Do not install project dependencies by hand.
 2. JavaScript tooling (only for UI work): Node 24 or newer, then `pnpm install --frozen-lockfile`.
 3. Tiny test model, built offline from random weights in about a second:
    `venv/bin/python .github/skills/perf-sandbox/scripts/make_tiny_sd.py models/Diffusers/tiny-sd`
    Select it once (Settings, `config.json` key `sd_model_checkpoint: "Diffusers/tiny-sd"`, or `POST /sdapi/v1/options`). Working copies copy `config.json` from the main checkout, so they start with the same model.
    With Hugging Face access, small real pipelines are also useful for other model families: `hf-internal-testing/tiny-stable-diffusion-xl-pipe`, `tiny-flux-pipe`, `tiny-sd3-pipe`.
+4. Optional measuring tools, not installed by the repo: `venv/bin/pip install py-spy` for sampling profiles of a running server, and Playwright with Chromium for browser measurements (for example `npm install --prefix tmp/playwright playwright` and `npx --prefix tmp/playwright playwright install chromium`). Measurement tools are the one exception to the rule against installing by hand.
 
 ## Working Copies
 
@@ -50,11 +51,11 @@ bash $S/mkwt.sh my-change     # one copy per variant you want to compare
 ```bash
 bash $S/run-app.sh <copy> <port> [extra launch.py args]   # waits until the API answers, prints pid and log path
 bash $S/stop-app.sh <copy> <port>
-bash $S/stop-app.sh --all                                 # stop every server any copy started (cleanup after crashed agents)
+bash $S/stop-app.sh --all                                 # stop every server any copy started; only when nothing else on the machine still needs one
 ```
 
 - The log is `<copy>/tmp/server-<port>.log` and includes per-phase timings (`Startup time`, `Installer time`, model load, generation timers). Debug logging is on by default.
-- Models come from the main checkout's `models/` (override with `SD_MODELS_DIR`). For synthetic libraries use flags such as `--lora-dir` or `--data-dir` that point into the copy's `tmp/`, never write into the shared `models/`.
+- Models come from the main checkout's `models/` (override with `SD_MODELSDIR`, the variable `launch.py` itself reads). For synthetic libraries use flags such as `--lora-dir` or `--data-dir` that point into the copy's `tmp/`, never write into the shared `models/`.
 - Torch threads: the script sets `OMP_NUM_THREADS=1` and the loader then uses half the cores. This keeps several servers usable on one machine and keeps hashes stable. Export `OMP_NUM_THREADS` to override, and compare hashes only between servers started the same way.
 - Memory guard: the script waits until 3 GB is available (`SD_MIN_FREE_MB`) and gives up after 20 minutes with exit code 2. One idle server with the tiny model takes about 1.3 GB.
 - Add `--quick` to skip the version check: each normal launch makes two unauthenticated GitHub API calls, and the hourly limit is shared by everything on the machine. Leave it out only when the installer itself is under test.
@@ -75,7 +76,7 @@ venv/bin/python $S/e2e.py --url http://127.0.0.1:<port> --runs 1 --compare ref.j
 ## Shared-Machine Rules
 
 - Use only the ports assigned to you; never use another agent's server.
-- Stop only processes you started (by pid file). Never `pkill` or `killall` by name.
+- Stop only processes you started (by pid file). Never `pkill` or `killall` by name. `stop-app.sh` checks that a pid still belongs to the server before signalling it.
 - No commits, stash, branch or config changes from agents unless the task says so.
 - Stop your server as soon as you have what you need.
 

@@ -7,8 +7,9 @@ export const meta = {
   ],
 }
 
-// args: { root: '/path/to/main/checkout', areas: ['installer', ...] (optional, default all), notes: 'optional text for every finder', portBase: 7700 }
-const ROOT = (args && args.root) || '/home/user/sdnext'
+// args: { root: '/path/to/main/checkout' (required), areas: ['installer', ...] (optional, default all), notes: 'optional text for every finder', portBase: 7700 }
+if (!args || !args.root) throw new Error('args.root (absolute path of the main checkout) is required')
+const ROOT = args.root
 const NOTES = (args && args.notes) || ''
 const PORT_BASE = (args && args.portBase) || 7700
 
@@ -17,12 +18,12 @@ const PREAMBLE = `You are one of several engineers running a performance audit o
 Read first: ${ROOT}/.github/skills/perf-audit/SKILL.md (what counts as a finding, measuring rules, recipes, finding format) and ${ROOT}/.github/skills/perf-sandbox/SKILL.md (isolated working copies, running servers, the end-to-end check).
 
 RULES
-- Discovery only: do not modify tracked files in ${ROOT}. Scratch scripts, synthetic data and notes go under ${ROOT}/tmp/agents/AREAKEY/. No git commands that change state in ${ROOT}.
-- If you need a server, run it from your own working copy (mkwt.sh AREAKEY) on port PORT; one server at a time, stop it when done. Add --quick to launches unless the installer is your scope.
+- Discovery only: do not modify tracked files in ${ROOT}. Scratch scripts, synthetic data and notes go under ${ROOT}/tmp/agents/{{AREA}}/. No git commands that change state in ${ROOT}.
+- If you need a server, run it from your own working copy (mkwt.sh {{AREA}}) on port {{PORT}}; one server at a time, stop it when done. Add --quick to launches unless the installer is your scope.
 - Evidence beats intuition; an empty list is a valid result. Report only what you would bet survives a skeptical review of both impact and safety. No style nits or sub-millisecond micro-optimizations on paths that run once.
 - Platform neutrality: a fix must hold on CUDA, ROCm, IPEX, DirectML, OpenVINO, MPS and CPU, and on Windows, Linux and macOS. If the machine has no GPU, do not present CPU-only effects as GPU effects.
 - Check upstream dev for each finding (git -C ${ROOT} show upstream/dev:PATH, if that remote exists) and say whether it is already changed there.
-${NOTES ? '\nNOTES FROM THE ORCHESTRATOR\n' + NOTES + '\n' : ''}
+{{NOTES}}
 DELIVERABLE
 Up to 8 findings ranked by impact times confidence, with the fields of the finding format, plus a coverage note (what you read and measured, what you did not get to) and leads for other scopes.`
 
@@ -125,7 +126,7 @@ log('areas: ' + keys.join(', '))
 phase('Find')
 const results = await parallel(keys.map((k, i) => () => {
   const s = SCOPES[k]
-  const prompt = PREAMBLE.replaceAll('AREAKEY', k).replaceAll('PORT', String(PORT_BASE + i * 2)) + '\n\nYOUR SCOPE (key: ' + k + '): ' + s.title + '\nFiles: ' + s.files + '\nFocus: ' + s.focus
+  const prompt = PREAMBLE.replaceAll('{{AREA}}', k).replaceAll('{{PORT}}', String(PORT_BASE + i * 2)).replace('{{NOTES}}', () => (NOTES ? '\nNOTES FROM THE ORCHESTRATOR\n' + NOTES + '\n' : '')) + '\n\nYOUR SCOPE (key: ' + k + '): ' + s.title + '\nFiles: ' + s.files + '\nFocus: ' + s.focus
   return agent(prompt, { label: 'find:' + k, phase: 'Find', schema: FINDINGS_SCHEMA }).then(r => (r ? { ...r, scope: k } : null))
 }))
 

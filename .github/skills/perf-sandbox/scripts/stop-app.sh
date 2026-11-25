@@ -1,11 +1,15 @@
 #!/bin/bash
 # Stop a server started with run-app.sh.
 # Usage: stop-app.sh <copy> <port>
-#        stop-app.sh --all [<copies folder>]   stop every server that run-app.sh started in any copy (default folder: <parent of the main checkout>/wt)
+#        stop-app.sh --all [<copies folder>]   stop every server that run-app.sh started in any copy (default folder: <parent of the main checkout>/wt);
+#                                              only when no other agent or workflow on the machine still needs its server
 stop_one() {
   f="$1/tmp/server-$2.pid"
   [ -f "$f" ] || { echo "no pid file: $f"; return 0; }
   PID=$(cat "$f")
+  if ! ps -o args= -p "$PID" 2>/dev/null | grep -Eq -- "launch\.py.* --port $2( |$)"; then # the server died earlier and the pid may have been reused
+    rm -f "$f"; echo "stale pid file removed: $f"; return 0
+  fi
   kill "$PID" 2>/dev/null
   for _ in $(seq 1 20); do kill -0 "$PID" 2>/dev/null || break; sleep 0.5; done
   kill -9 "$PID" 2>/dev/null

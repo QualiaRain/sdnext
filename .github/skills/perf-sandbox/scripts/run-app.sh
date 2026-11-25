@@ -3,7 +3,7 @@
 #
 # Usage: run-app.sh <copy> <port> [extra launch.py args]
 #   Log: <copy>/tmp/server-<port>.log   PID file: <copy>/tmp/server-<port>.pid   Stop with: stop-app.sh <copy> <port>
-# Env:   SD_MODELS_DIR    models folder (default: <main checkout>/models, shared by all copies)
+# Env:   SD_MODELSDIR     models folder, the same variable launch.py reads (default: <main checkout>/models, shared by all copies)
 #        OMP_NUM_THREADS  default 1; the loader then raises torch threads to half the cores, so several servers can share a machine
 #        SD_MIN_FREE_MB   default 3000; wait until this much memory is available, give up after 20 minutes (Linux only)
 # Exit codes: 0 ready, 1 server failed or timed out, 2 not enough memory.
@@ -12,10 +12,14 @@ WT="$(cd "$WT" && pwd)" || exit 1
 COMMON="$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir)" || exit 1
 MAIN="$(dirname "$COMMON")"
 PY="$WT/venv/bin/python"; [ -x "$PY" ] || PY="$MAIN/venv/bin/python"
-MODELS="${SD_MODELS_DIR:-$MAIN/models}"
+MODELS="${SD_MODELSDIR:-$MAIN/models}"
 cd "$WT" || exit 1
 mkdir -p tmp
-if [ -f "tmp/server-$PORT.pid" ] && kill -0 "$(cat "tmp/server-$PORT.pid")" 2>/dev/null; then echo "already running pid=$(cat "tmp/server-$PORT.pid")"; exit 0; fi
+if [ -f "tmp/server-$PORT.pid" ]; then
+  OLD="$(cat "tmp/server-$PORT.pid")"
+  if ps -o args= -p "$OLD" 2>/dev/null | grep -Eq -- "launch\.py.* --port $PORT( |$)"; then echo "already running pid=$OLD"; exit 0; fi
+  rm -f "tmp/server-$PORT.pid" # stale: the server died and the pid may belong to another process now
+fi
 if [ -r /proc/meminfo ]; then
   n=0
   while [ "$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)" -lt "${SD_MIN_FREE_MB:-3000}" ]; do

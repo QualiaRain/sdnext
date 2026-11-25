@@ -65,14 +65,14 @@ Save each finding as one JSON file (for example `tmp/perf/findings/<area>-<n>.js
 
 ## Running Finders At Scale
 
-`workflow.js` in this folder runs one finder agent per area with the scopes, rules and output schema used in practice. Run it with the Workflow tool:
+Any agent can do this by hand: start one sub-agent per area, give each the preamble and its scope from `workflow.js` in this folder (`PREAMBLE`, `SCOPES`) and ask for findings in the format above, then collect the results. Agent runtimes that run JavaScript orchestration scripts with `agent()`, `parallel()` and `args` globals (for example the Workflow tool in Claude Code) can run `workflow.js` directly:
 
 - `scriptPath`: absolute path of `.github/skills/perf-audit/workflow.js`
-- `args`: `{ "root": "<main checkout>", "areas": ["installer", "api"], "notes": "optional text for every finder, such as baseline data locations" }` (omit `areas` for all eleven)
+- `args`: `{ "root": "<main checkout>" (required), "areas": ["installer", "api"], "notes": "optional text for every finder, such as baseline data locations" }` (omit `areas` for all eleven)
 
 It returns one object per area with `findings`, `coverage` and `leads`. Save every finding to its own file, deduplicate across areas (several areas often reach the same root cause), and turn useful leads into findings of their own.
 
-Concurrency per workflow is limited to the number of CPUs minus two. Finders may start servers through `perf-sandbox`; on a 4-core, 16 GB machine keep the total below about eight agents at a time.
+However the finders are started, keep the number running at once within the machine's means (the Claude Code runtime caps a workflow at the number of CPUs minus two). Finders may start servers through `perf-sandbox`; on a 4-core, 16 GB machine keep the total below about eight agents at a time.
 
 ## Output
 

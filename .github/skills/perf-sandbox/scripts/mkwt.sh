@@ -2,7 +2,7 @@
 # Create an isolated, complete working copy of SD.Next for measuring or testing a change.
 # The copy is a git worktree with its own submodule checkouts (cloned from the local object store, no network),
 # symlinks to the main checkout's venv and node_modules, and a copy of its config.json.
-# Nothing done in the copy touches the main checkout. Calling it again with the same name returns the same copy.
+# Nothing done in the copy touches the main checkout's working tree. Calling it again with the same name returns the same copy.
 #
 # Usage: mkwt.sh <name>        prints the path of the copy on its last line
 # Env:   BASE=<commit>         commit to check out (default: HEAD of the main checkout)
@@ -41,7 +41,7 @@ done
 [ -e node_modules ] || ln -s "$MAIN/node_modules" node_modules
 [ -e config.json ] || { [ -f "$MAIN/config.json" ] && cp "$MAIN/config.json" config.json; }
 mkdir -p tmp
-# keep the helper links out of `git status` in this copy only
+# keep the helper links out of `git status`; info/exclude is shared by all worktrees of the repository, which is harmless because the main checkout ignores these paths anyway
 excl=$(git rev-parse --git-path info/exclude)
 mkdir -p "$(dirname "$excl")"
 grep -qs '^/venv$' "$excl" || printf '/venv\n/node_modules\n/.wt-ready\n' >> "$excl"
