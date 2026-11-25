@@ -1,11 +1,59 @@
 import re
+import time
 from copy import copy
+from collections import defaultdict
 import numpy as np
 import gradio as gr
 from PIL import Image, ImageDraw
 from modules.logger import log
 from modules import shared, processing, devices, processing_class, ui_common, ui_components, ui_symbols, images, extra_networks, sd_models
-from modules.detailer import DetailerResult, detailer_opt, assign_prompts, parse_prompt_lines
+from modules.detailer import DetailerResult, detailer_opt, assign_prompts, parse_prompt_lines, split_skip_classes
+
+
+DETECTION_COLOR = (0, 190, 190) # processed
+SKIP_COLOR = (230, 200, 0) # skipped by [SKIP=...]
+CONFLICT_COLOR = (220, 40, 40) # [SKIP=...] ignored because a [CLASS=...] line gives the class a prompt
+
+
+def networks_equal(a, b) -> bool:
+    return {k: v for k, v in a.items() if len(v) > 0} == {k: v for k, v in b.items() if len(v) > 0}
+
+
+def activate_networks(p, network_data):
+    # activate switches loaded networks to exactly the requested set; the disable flag only guards processing_diffusers
+    disabled = p.disable_extra_networks
+    p.disable_extra_networks = False
+    p.network_data = network_data
+    extra_networks.activate(p, network_data)
+    p.disable_extra_networks = disabled
+
+
+def get_mode(model=None) -> str | None:
+    """How the detailer runs on a model: 'inpaint' through its inpaint pipeline, 'custom' as loaded, 'edit' with each crop as the condition image, None when it cannot run."""
+    if model is None:
+        model = shared.sd_model
+    if model is None:
+        return None
+    if sd_models.get_class_task(sd_models.get_task_class(model, sd_models.DiffusersTaskType.INPAINTING)) == sd_models.DiffusersTaskType.INPAINTING:
+        return 'inpaint'
+    if model.__class__.__name__ in sd_models.pipe_switch_task_exclude:
+        return 'custom'
+    if sd_models.get_max_condition_images(model) > 0:
+        return 'edit'
+    return None
+
+
+def is_compatible(model=None) -> bool:
+    return get_mode(model) is not None
+
+
+def get_detail_model(p):
+    """Pipeline the detail pass runs on: the base model behind an active control wrapper, else the loaded model."""
+    if getattr(p, 'is_control', False):
+        from modules.control import run
+        if run.original_pipeline is not None:
+            return run.original_pipeline
+    return shared.sd_model
 
 
 class Detailer():
@@ -110,7 +158,7 @@ class Detailer():
         )
         return [merged]
 
-    def filter(self, items: list[DetailerResult], image: Image.Image, p: processing.StableDiffusionProcessing = None) -> list[DetailerResult]:
+    def filter(self, items: list[DetailerResult], image: Image.Image, p: processing.StableDiffusionProcessing = None, top_n: bool = True) -> list[DetailerResult]:
         if items is None or len(items) == 0:
             return []
         if p is not None:
@@ -127,22 +175,23 @@ class Detailer():
                 if not ((x_size >= min_size) and (y_size >= min_size) and (x_size <= max_size) and (y_size <= max_size)):
                     filtered.remove(item)
             filtered = sorted(filtered, key=lambda x: x.score, reverse=True)
-            filtered = filtered[:max_detected]
+            if top_n:
+                filtered = filtered[:max_detected]
         else:
             filtered = items
         if len(filtered) != len(items):
             log.debug(f'Detailer: items={len(items)} filtered={len(filtered)}')
         return filtered
 
-    def draw_masks(self, image: Image.Image, items: list[DetailerResult], p=None) -> Image.Image | np.ndarray:
+    def draw_masks(self, image: Image.Image, items: list[DetailerResult], p=None, colors: list[tuple] | None = None, prefix: str | None = None) -> Image.Image | np.ndarray:
         if not isinstance(image, Image.Image):
             image = Image.fromarray(image)
         image = image.convert('RGBA')
         size = min(image.width, image.height) // 32
         font = images.get_font(size)
-        color = (0, 190, 190)
         # log.debug(f'Detailer: draw={items}')
         for i, item in enumerate(items):
+            color = colors[i] if colors is not None and i < len(colors) else DETECTION_COLOR
             if detailer_opt(p, 'detailer_segmentation') and item.mask is not None:
                 mask = item.mask.convert('L')
             else:
@@ -155,8 +204,9 @@ class Detailer():
             image = Image.alpha_composite(image, overlay)
 
             draw_text = ImageDraw.Draw(image)
-            draw_text.text((item.box[0] + 2, item.box[1] - size - 2), f'{i+1} {item.label} {item.score:.2f}', fill="black", font=font)
-            draw_text.text((item.box[0] + 0, item.box[1] - size - 4), f'{i+1} {item.label} {item.score:.2f}', fill="white", font=font)
+            text = f'{prefix or i+1} {item.label} {item.score:.2f}'
+            draw_text.text((item.box[0] + 2, item.box[1] - size - 2), text, fill="black", font=font)
+            draw_text.text((item.box[0] + 0, item.box[1] - size - 4), text, fill="white", font=font)
         image = image.convert("RGB")
         return np.array(image)
 
@@ -170,10 +220,13 @@ class Detailer():
         if np_image is None or p.detailer_active >= p.batch_size * p.n_iter:
             return np_image
 
-        shared.sd_model = sd_models.set_diffuser_pipe(shared.sd_model, sd_models.DiffusersTaskType.INPAINTING)
-        if (sd_models.get_diffusers_task(shared.sd_model) != sd_models.DiffusersTaskType.INPAINTING) and (shared.sd_model.__class__.__name__ not in sd_models.pipe_switch_task_exclude):
-            log.error(f'Detailer: model="{shared.sd_model.__class__.__name__}" not compatible')
-            return np_image
+        detail_model = get_detail_model(p)
+        mode = get_mode(detail_model)
+        if mode != 'edit':
+            shared.sd_model = sd_models.set_diffuser_pipe(shared.sd_model, sd_models.DiffusersTaskType.INPAINTING)
+            if (sd_models.get_diffusers_task(shared.sd_model) != sd_models.DiffusersTaskType.INPAINTING) and (shared.sd_model.__class__.__name__ not in sd_models.pipe_switch_task_exclude):
+                log.error(f'Detailer: model="{shared.sd_model.__class__.__name__}" not compatible')
+                return np_image
 
         models = []
         if len(shared.opts.detailer_args) > 0:
@@ -198,14 +251,27 @@ class Detailer():
         # detailer_prompt/negative are the same for every model in the chain, so resolve them once
         orig_prompt: str = orig_p.get('all_prompts', [''])[0]
         orig_negative: str = orig_p.get('all_negative_prompts', [''])[0]
-        prompt: str = orig_p.get('detailer_prompt', '')
-        negative: str = orig_p.get('detailer_negative', '')
-        if prompt is None or len(prompt) == 0:
+        prompt: str = orig_p.get('detailer_prompt', '') or ''
+        negative: str = orig_p.get('detailer_negative', '') or ''
+        # '[SKIP=name]' lines in either detailer prompt are directives: take them out first so a prompt with only skip lines still falls back to the main prompt
+        skip_prompt, stripped_prompt = split_skip_classes(prompt)
+        skip_negative, stripped_negative = split_skip_classes(negative)
+        prompt_only_skip = stripped_prompt != prompt and stripped_prompt.strip() == ''
+        negative_only_skip = stripped_negative != negative and stripped_negative.strip() == ''
+        prompt, negative = stripped_prompt, stripped_negative
+        edit_warnings = [] # logged once per job, at the first detection processed
+        if (mode == 'edit') and not getattr(p, 'detailer_strength_warned', False):
+            from modules.processing_args import get_params
+            if 'strength' not in get_params(detail_model): # the pipeline redraws each crop in full
+                edit_warnings.append(f'Detailer: model="{detail_model.__class__.__name__}" strength=ignored')
+                if len(prompt) == 0 or prompt_only_skip:
+                    edit_warnings.append(f'Detailer prompt: empty, main prompt used: model="{detail_model.__class__.__name__}" redraws each detection from the prompt')
+        if len(prompt) == 0 or prompt_only_skip:
             prompt = orig_prompt
         else:
             prompt = prompt.replace('[PROMPT]', orig_prompt)
             prompt = prompt.replace('[prompt]', orig_prompt)
-        if len(negative) == 0:
+        if len(negative) == 0 or negative_only_skip:
             negative = orig_negative
         else:
             negative = negative.replace('[PROMPT]', orig_negative)
@@ -219,7 +285,30 @@ class Detailer():
         matched_prompt_classes = set()
         matched_negative_classes = set()
 
+        # skipped classes are excluded from detailing, unless a '[CLASS=name]' line gives the class a prompt
+        skip_requested = skip_prompt | skip_negative
+        conflict_classes = skip_requested & (prompt_classes | negative_classes)
+        skip_classes = skip_requested - conflict_classes
+        matched_skip_classes = set()
+        warned_conflict_classes = set()
+
+        main_network_data = p.network_data # networks of the main pass are still active when detailer starts
+        active_network_data = main_network_data
+
         for i, model_val in enumerate(models):
+            if shared.state.skipped:
+                shared.state.skipped = False
+                continue
+            if shared.state.interrupted:
+                break
+            while shared.state.paused:
+                log.debug('Detail paused')
+                if shared.state.interrupted:
+                    break
+                if shared.state.skipped:
+                    continue
+                time.sleep(0.1)
+
             if ':' in model_val:
                 model_name, model_args = model_val.split(':', 1)
             else:
@@ -235,11 +324,31 @@ class Detailer():
             if image is None:
                 image = Image.fromarray(np_image)
             items = self.predict(name, model, image, p=p)
+            skipped = []
+            detected = len(items)
+            if len(skip_requested) > 0:
+                matched_skip_classes |= skip_requested & {(item.label or '').strip().lower() for item in items}
+                skipped = [item for item in items if (item.label or '').strip().lower() in skip_classes]
+                items = [item for item in items if (item.label or '').strip().lower() not in skip_classes] # before filter so skipped items don't take top-n slots
+                skipped = self.filter(skipped, image, p=p, top_n=False) # same confidence and size limits as processed items, max detected only limits processing
+                if len(skipped) > 0:
+                    log.info(f'Detailer: model="{name}" skipped={len(skipped)} classes={sorted({(item.label or "").strip().lower() for item in skipped})}')
+                    if detailer_opt(p, 'detailer_include_detections', 'detailer_save'):
+                        annotated = self.draw_masks(annotated, skipped, p=p, colors=len(skipped) * [SKIP_COLOR], prefix='skip')
             items = self.filter(items, image, p=p)
 
             if len(items) == 0:
-                log.info(f'Detailer: model="{name}" no items detected')
+                if len(skipped) > 0 and len(skipped) == detected:
+                    log.info(f'Detailer: model="{name}" all items skipped')
+                elif len(skipped) > 0:
+                    log.info(f'Detailer: model="{name}" no items to process: skipped={len(skipped)} filtered={detected - len(skipped)}')
+                else:
+                    log.info(f'Detailer: model="{name}" no items detected')
                 continue
+
+            for label in sorted(conflict_classes & {(item.label or '').strip().lower() for item in items} - warned_conflict_classes):
+                log.warning(f'Detailer: class="{label}" has both [SKIP={label}] and [CLASS={label}] in the detailer prompts: skip ignored, detection processed with its class prompt')
+                warned_conflict_classes.add(label)
 
             if detailer_opt(p, 'detailer_merge') and len(items) > 1:
                 log.debug(f'Detailer: model="{name}" items={len(items)} merge')
@@ -301,27 +410,46 @@ class Detailer():
             if detailer_opt(p, 'detailer_sort'):
                 items = sorted(items, key=lambda x: x.box[0]) # sort items left-to-right to improve consistency
             if detailer_opt(p, 'detailer_include_detections', 'detailer_save'):
-                annotated = self.draw_masks(annotated, items, p=p)
+                annotated = self.draw_masks(annotated, items, p=p, colors=[CONFLICT_COLOR if (item.label or '').strip().lower() in conflict_classes else DETECTION_COLOR for item in items])
 
             labels_this_pass = {(item.label or '').strip().lower() for item in items}
             matched_prompt_classes |= (prompt_classes & labels_this_pass)
             matched_negative_classes |= (negative_classes & labels_this_pass)
-            resolved_prompts = assign_prompts(prompt, items)
-            resolved_negatives = assign_prompts(negative, items)
+            resolved_prompts = assign_prompts(prompt, items, default=orig_prompt)
+            resolved_negatives = assign_prompts(negative, items, default=orig_negative)
             for j, item in enumerate(items):
+                if shared.state.skipped:
+                    shared.state.skipped = False
+                    continue
+                if shared.state.interrupted:
+                    break
+                while shared.state.paused:
+                    log.debug('Detail paused')
+                    if shared.state.interrupted:
+                        break
+                    if shared.state.skipped:
+                        continue
+                    time.sleep(0.1)
                 if item.mask is None:
                     continue
-                pc.keep_prompts = True
+                if len(edit_warnings) > 0 and not getattr(p, 'detailer_strength_warned', False):
+                    for message in edit_warnings:
+                        log.warning(message)
+                    p.detailer_strength_warned = True
+
                 shared.sd_model.fail_on_switch_error = True
+                pc.keep_prompts = True
                 pc.prompt = resolved_prompts[j]
                 pc.negative_prompt = resolved_negatives[j]
                 pc.prompts = [pc.prompt]
                 pc.negative_prompts = [pc.negative_prompt]
+                pc.network_data = defaultdict(list) # own dict since pc is a shallow copy of p and parse_prompts updates network_data in place
                 pc.prompts, pc.network_data = extra_networks.parse_prompts(pc.prompts, pc.network_data)
-                pc.disable_extra_networks = True # disable processing_diffusers from handling network activation since its handled here
-                network_same = len(p.network_data.values()) == len(pc.network_data.values()) and all(x == y for x, y in zip(p.network_data.values(), pc.network_data.values()))
+                network_same = networks_equal(active_network_data, pc.network_data)
                 if not network_same:
-                    extra_networks.activate_filtered(pc, pc.network_data)
+                    activate_networks(pc, pc.network_data)
+                    active_network_data = pc.network_data
+                pc.disable_extra_networks = True # disable processing_diffusers from handling network activation since its handled here
                 log.debug(f'Detail: model="{i+1}:{name}" item={j+1}/{len(items)} box={item.box} label="{item.label}" score={item.score:.2f} seg={detailer_opt(p, "detailer_segmentation")} network={network_same} prompt="{pc.prompt}"')
                 pc.init_images = [image]
                 pc.image_mask = [item.mask]
@@ -335,9 +463,14 @@ class Detailer():
 
                 # process
                 jobid = shared.state.begin('Detailer')
-                pp = processing.process_images_inner(pc)
-                if not network_same:
-                    extra_networks.deactivate(pc, force=True)
+                pipe = shared.sd_model
+                if mode == 'edit':
+                    pipe.no_task_switch = True # the crop is the condition image, the mask applies on paste
+                try:
+                    pp = processing.process_images_inner(pc)
+                finally:
+                    if (mode == 'edit') and hasattr(pipe, 'no_task_switch'): # one-shot flag, a leftover would skip the next task switch
+                        del pipe.no_task_switch
                 shared.sd_model.fail_on_switch_error = False
                 shared.state.end(jobid)
 
@@ -367,12 +500,18 @@ class Detailer():
                 p.image_mask = blend([np.array(m) for m in mask_all])
                 p.image_mask = Image.fromarray(p.image_mask)
 
+        if not networks_equal(active_network_data, main_network_data):
+            activate_networks(p, main_network_data) # restore networks of the main pass for the next image in the batch
+
         unmatched_prompt = prompt_classes - matched_prompt_classes
         if len(unmatched_prompt) > 0:
             log.warning(f'Detailer prompt: class tags did not match any detection across models={models}: unmatched={sorted(unmatched_prompt)}')
         unmatched_negative = negative_classes - matched_negative_classes
         if len(unmatched_negative) > 0:
             log.warning(f'Detailer negative: class tags did not match any detection across models={models}: unmatched={sorted(unmatched_negative)}')
+        unmatched_skip = skip_requested - matched_skip_classes
+        if len(unmatched_skip) > 0:
+            log.warning(f'Detailer skip: class tags did not match any detection across models={models}: unmatched={sorted(unmatched_skip)}')
 
         if image is not None:
             np_images.append(np.array(image))
@@ -421,7 +560,6 @@ class Detailer():
         p.all_prompts = [p.detailer_prompt or '']
         p.all_negative_prompts = [p.detailer_negative or '']
         p.all_seeds = [seed]
-        p.all_subseeds = [-1]
         p.scripts = None
         p.is_control = False
         p.do_not_save_samples = True
@@ -510,12 +648,12 @@ class Detailer():
                 renoise_end = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label='Renoise end', value=shared.opts.detailer_sigma_adjust_max, elem_id=f"{tab}_detailer_renoise_end")
             sampler_block = None
             if tab == 'extras': # fold the standalone sampler settings into the detailer accordion; values applied per-job in make_processing, never global opts
-                from modules import sd_samplers
-                sd_samplers.set_samplers()
-                sampler_choices = [s.name for s in sd_samplers.visible_samplers() if s.name != 'Same as primary']
+                from modules import ui_sections
+                sampler_choices, default_value, filtered = ui_sections.sampler_choices()
                 with gr.Accordion('Sampler', open=False, elem_id=f"{tab}_detailer_sampler_accordion", elem_classes=["small-accordion"]):
                     with gr.Row():
-                        d_sampler = gr.Dropdown(label='Sampling method', choices=sampler_choices, value='Default', elem_id=f"{tab}_detailer_sampler")
+                        ui_sections.create_filter_indicator(tab, 'Sampler', filtered)
+                        d_sampler = gr.Dropdown(label='Sampling method', choices=sampler_choices, value=default_value, type='value', elem_id=f"{tab}_detailer_sampler")
                         d_prediction = gr.Dropdown(label='Prediction method', choices=['default', 'epsilon', 'sample', 'v_prediction', 'flow_prediction'], value='default', elem_id=f"{tab}_detailer_prediction")
                     with gr.Row():
                         d_shift = gr.Slider(label='Flow shift', minimum=0, maximum=10, step=0.1, value=shared.opts.schedulers_shift, elem_id=f"{tab}_detailer_shift")

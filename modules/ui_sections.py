@@ -1,3 +1,4 @@
+import threading
 import gradio as gr
 from modules import shared, modelloader, ui_symbols, ui_common, sd_samplers
 from modules.logger import log
@@ -5,7 +6,19 @@ from modules.ui_components import ToolButton
 from modules.caption import caption
 
 
-def create_toprow(is_img2img: bool = False, id_part: str | None = None, generate_visible: bool = True, negative_visible: bool = True, reprocess_visible: bool = True):
+_save_timer = None
+_save_lock = threading.Lock()
+
+
+def create_toprow(
+        is_img2img: bool = False,
+        id_part: str | None = None,
+        generate_visible: bool = True,
+        negative_visible: bool = True,
+        reprocess_visible: bool = True,
+        schedule_visible: bool = True,
+    ):
+
     def apply_styles(prompt, prompt_neg, styles):
         prompt = shared.prompt_styles.apply_styles_to_prompt(prompt, styles, wildcards=not shared.opts.extra_networks_apply_unparsed)
         prompt_neg = shared.prompt_styles.apply_negative_styles_to_prompt(prompt_neg, styles, wildcards=not shared.opts.extra_networks_apply_unparsed)
@@ -36,6 +49,7 @@ def create_toprow(is_img2img: bool = False, id_part: str | None = None, generate
             with gr.Row(elem_id=f"{id_part}_generate_box"):
                 reprocess = []
                 submit = gr.Button('Generate', elem_id=f"{id_part}_generate", variant='primary', visible=generate_visible)
+                schedule = gr.Button('Schedule', elem_id=f"{id_part}_schedule", variant='primary', visible=schedule_visible)
                 if reprocess_visible:
                     reprocess.append(gr.Button('Reprocess', elem_id=f"{id_part}_reprocess", variant='primary', visible=True))
                     reprocess.append(gr.Button('Reprocess decode', elem_id=f"{id_part}_reprocess_decode", variant='primary', visible=False))
@@ -67,7 +81,7 @@ def create_toprow(is_img2img: bool = False, id_part: str | None = None, generate
                 styles_btn_select.click(_js="applyStyles", fn=parse_style, inputs=[styles], outputs=[styles], show_progress='hidden')
                 styles_btn_apply.click(fn=apply_styles, inputs=[prompt, negative_prompt, styles], outputs=[prompt, negative_prompt, styles], show_progress='hidden')
                 styles_btn_save.click(fn=lambda: None, _js='() => quickSaveStyle()', inputs=[], outputs=[], show_progress='hidden')
-    return prompt, styles, negative_prompt, submit, reprocess, button_paste, button_extra, token_counter, token_button, negative_token_counter, negative_token_button
+    return prompt, styles, negative_prompt, submit, reprocess, button_paste, button_extra, token_counter, token_button, negative_token_counter, negative_token_button, schedule
 
 
 def create_resolution_inputs(tab, default_width=1024, default_height=1024, step=8):
@@ -95,23 +109,14 @@ def create_batch_inputs(tab, accordion=True):
     return batch_count, batch_size
 
 
-def create_seed_inputs(tab, reuse_visible=True, accordion=True, subseed_visible=True, seed_resize_visible=False):
+def create_seed_inputs(tab, reuse_visible=True, accordion=True):
     with gr.Accordion(open=False, label="Seed", elem_id=f"{tab}_seed_group", elem_classes=["small-accordion"]) if accordion else gr.Group():
         with gr.Row(elem_id=f"{tab}_seed_row", variant="compact"):
             seed = gr.Number(label='Initial seed', value=-1, elem_id=f"{tab}_seed", container=True)
             random_seed = ToolButton(ui_symbols.random, elem_id=f"{tab}_seed_random")
             reuse_seed = ToolButton(ui_symbols.reuse, elem_id=f"{tab}_seed_reuse", visible=reuse_visible)
-        with gr.Row(elem_id=f"{tab}_subseed_row", variant="compact", visible=subseed_visible):
-            subseed = gr.Number(label='Variation', value=-1, elem_id=f"{tab}_subseed", container=True)
-            random_subseed = ToolButton(ui_symbols.random, elem_id=f"{tab}_subseed_random")
-            reuse_subseed = ToolButton(ui_symbols.reuse, elem_id=f"{tab}_subseed_reuse", visible=reuse_visible)
-            subseed_strength = gr.Slider(label='Variation strength', value=0.0, minimum=0, maximum=1, step=0.01, elem_id=f"{tab}_subseed_strength", elem_classes=["subseed-strength"])
-        with gr.Row(visible=seed_resize_visible):
-            seed_resize_from_w = gr.Slider(minimum=0, maximum=4096, step=8, label="Resize seed from width", value=0, elem_id=f"{tab}_seed_resize_from_w")
-            seed_resize_from_h = gr.Slider(minimum=0, maximum=4096, step=8, label="Resize seed from height", value=0, elem_id=f"{tab}_seed_resize_from_h")
         random_seed.click(fn=lambda: -1, show_progress='hidden', inputs=[], outputs=[seed])
-        random_subseed.click(fn=lambda: -1, show_progress='hidden', inputs=[], outputs=[subseed])
-    return seed, reuse_seed, subseed, reuse_subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w
+    return seed, reuse_seed
 
 
 def create_video_inputs(tab:str, show_always:bool=False):
@@ -213,75 +218,232 @@ def create_color_inputs(tab):
         return grading_brightness, grading_contrast, grading_saturation, grading_hue, grading_gamma, grading_sharpness, grading_color_temp, grading_shadows, grading_midtones, grading_highlights, grading_clahe_clip, grading_clahe_grid, grading_shadows_tint, grading_highlights_tint, grading_split_tone_balance, grading_vignette, grading_grain, grading_lut_cube_file, grading_lut_strength
 
 
+def sampler_choices(choices=None, selected='Default', same_as_primary=False):
+    """Build display-only sampler choices without changing the sampler catalog."""
+    if choices is None:
+        sd_samplers.set_samplers()
+        choices = [sampler for sampler in sd_samplers.samplers if sampler.name != 'Same as primary']
+    names = [choice.name if hasattr(choice, 'name') else choice for choice in choices]
+    visible, filtered = ui_common.filter_ui_choices(names, shared.opts.show_samplers, selected)
+    if same_as_primary:
+        visible.insert(0, 'Same as primary')
+    value = selected if selected in visible else visible[0]
+    return visible, value, filtered
+
+
+def upscaler_choices(choices, selected=None):
+    """Build display-only upscaler choices without changing available upscalers."""
+    return ui_common.filter_ui_choices(choices, shared.opts.show_upscalers, selected)
+
+
+def create_filter_indicator(tabname, kind, filtered):
+    if not filtered:
+        return None
+    indicator = ToolButton(value=ui_symbols.info, tooltip=f'{kind} list filtered', elem_id=f'{tabname}_{kind.lower()}_filter_indicator', elem_classes=['filter-indicator'])
+    indicator.click(fn=None, _js="() => openSettingsSection('ui')", inputs=[], outputs=[], show_progress='hidden')
+    return indicator
+
+
 def create_sampler_and_steps_selection(choices, tabname, default_steps:int=20):
     if choices is None:
         sd_samplers.set_samplers()
         choices = [x for x in sd_samplers.samplers if not x.name == 'Same as primary']
+    dropdown_choices, default_value, filtered = sampler_choices(choices)
     with gr.Row(elem_id=f"{tabname}_sampler_row", elem_classes=['flex-break', 'flexbox']):
         steps = gr.Slider(minimum=1, maximum=100, step=1, label="Steps", elem_id=f"{tabname}_steps", value=default_steps)
-        sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value='Default', type="index")
+        sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=dropdown_choices, value=default_value, type="value")
+        create_filter_indicator(tabname, 'Sampler', filtered)
+    _sampler_dropdowns[tabname] = sampler_index
     return steps, sampler_index
 
 
+_sampler_dropdowns = {}
+
+
+def save_with_debounce(delay=0.5):
+    global _save_timer # pylint: disable=global-statement
+    with _save_lock:
+        try:
+            if _save_timer is not None and _save_timer.is_alive():
+                _save_timer.cancel()
+        except Exception as e:
+            log.error(f'Sampler: save debounce cancel error: {e}')
+        def _do_save():
+            try:
+                shared.opts.save(silent=True)
+            except Exception as e:
+                log.error(f'Sampler: save execution error: {e}')
+
+        _save_timer = threading.Timer(delay, _do_save)
+        _save_timer.start()
+
+
+def sampler_ui_defaults(name):
+    from modules import sd_samplers_diffusers
+
+    sampler = next((item for item in sd_samplers_diffusers.samplers_data_diffusers if item.name == name), None)
+    if sampler is None or name == 'Default' or sampler.constructor is None:
+        return None
+
+    option_keys = {
+        'schedulers_sigma',
+        'schedulers_timestep_spacing',
+        'schedulers_beta_schedule',
+        'schedulers_prediction_type',
+        'schedulers_timesteps',
+        'schedulers_sigma_adjust',
+        'schedulers_sigma_adjust_min',
+        'schedulers_sigma_adjust_max',
+        'schedulers_solver_order',
+        'schedulers_shift',
+        'schedulers_base_shift',
+        'schedulers_max_shift',
+        'schedulers_base_image_seq_len',
+        'schedulers_max_image_seq_len',
+        'schedulers_use_loworder',
+        'schedulers_use_thresholding',
+        'schedulers_dynamic_shift',
+        'schedulers_rescale_betas',
+    }
+    values = {key: shared.opts.get_default(key) for key in option_keys}
+    model = shared.sd_model if shared.sd_loaded else None
+    scheduler = getattr(model, 'default_scheduler', None) if model is not None else None
+    scheduler = scheduler or (getattr(model, 'scheduler', None) if model is not None else None)
+    model_config = getattr(scheduler, 'config', None)
+    model_defaults = dict(model_config.items()) if model_config is not None and hasattr(model_config, 'items') else {}
+
+    defaults = dict(sd_samplers_diffusers.config.get('All', {}))
+    defaults.update(model_defaults)
+    defaults.update(sd_samplers_diffusers.config.get(name, {}))
+    defaults.update(sampler.options)
+    if 'num_train_timesteps' in defaults:
+        values['schedulers_timesteps'] = str(defaults['num_train_timesteps'])
+    if 'prediction_type' in defaults and 'Flow' in name and name not in sd_samplers_diffusers.flow_exclude:
+        defaults['prediction_type'] = 'flow_prediction'
+    if 'SGM' in name:
+        defaults['timestep_spacing'] = 'trailing'
+
+    prediction = defaults.get('prediction_type')
+    values['schedulers_prediction_type'] = {
+        'v-prediction': 'v_prediction',
+    }.get(prediction, prediction if prediction in {'epsilon', 'sample', 'v_prediction', 'flow_prediction'} else 'default')
+    spacing = defaults.get('timestep_spacing')
+    if spacing in {'linspace', 'leading', 'trailing'}:
+        values['schedulers_timestep_spacing'] = spacing
+    values['schedulers_beta_schedule'] = {
+        'linear': 'linear',
+        'scaled_linear': 'scaled',
+        'squaredcos_cap_v2': 'cosine',
+        'sigmoid': 'sigmoid',
+    }.get(defaults.get('beta_schedule'), 'default')
+    sigma = defaults.get('sigma_schedule')
+    if sigma not in {'karras', 'betas', 'exponential', 'lambdas', 'flowmatch'}:
+        sigma = next((value for key, value in (
+            ('use_karras_sigmas', 'karras'),
+            ('use_beta_sigmas', 'betas'),
+            ('use_exponential_sigmas', 'exponential'),
+            ('use_lu_lambdas', 'lambdas'),
+            ('use_flow_sigmas', 'flowmatch'),
+        ) if defaults.get(key)), 'default')
+    values['schedulers_sigma'] = sigma
+
+    mapping = {
+        'solver_order': 'schedulers_solver_order',
+        'lower_order_final': 'schedulers_use_loworder',
+        'thresholding': 'schedulers_use_thresholding',
+        'rescale_betas_zero_snr': 'schedulers_rescale_betas',
+        'use_dynamic_shifting': 'schedulers_dynamic_shift',
+        'base_image_seq_len': 'schedulers_base_image_seq_len',
+        'max_image_seq_len': 'schedulers_max_image_seq_len',
+        'sigma_adjust': 'schedulers_sigma_adjust',
+        'sigma_adjust_min': 'schedulers_sigma_adjust_min',
+        'sigma_adjust_max': 'schedulers_sigma_adjust_max',
+        'base_shift': 'schedulers_base_shift',
+        'max_shift': 'schedulers_max_shift',
+    }
+    for config_key, option_key in mapping.items():
+        if config_key in defaults:
+            values[option_key] = defaults[config_key]
+    for config_key in ('flow_shift', 'shift'):
+        if config_key in defaults:
+            values['schedulers_shift'] = defaults[config_key]
+            break
+    return values
+
+
 def create_sampler_options(tabname):
+    saved_defaults = shared.opts.data.copy()
+    sampler_dropdown = _sampler_dropdowns.get(tabname)
+    selected_sampler = getattr(sampler_dropdown, 'value', 'Default')
+    sampler_defaults = sampler_ui_defaults(selected_sampler)
+    if selected_sampler == 'Default':
+        timesteps_value = saved_defaults.get('schedulers_timesteps', shared.opts.get_default('schedulers_timesteps'))
+    else:
+        timesteps_value = sampler_defaults['schedulers_timesteps'] if sampler_defaults is not None else shared.opts.get_default('schedulers_timesteps')
+
     def set_sampler_options(sampler_options):
         shared.opts.data['schedulers_dynamic_shift'] = 'dynamic' in sampler_options
         shared.opts.data['schedulers_use_thresholding'] = 'thresholding' in sampler_options
         shared.opts.data['schedulers_use_loworder'] = 'low order' in sampler_options
         shared.opts.data['schedulers_rescale_betas'] = 'rescale' in sampler_options
         log.debug(f'Sampler set options: {sampler_options}')
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_fallback(fallback):
         log.debug(f'Sampler set options: fallback={fallback}')
         shared.opts.schedulers_fallback = fallback
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_timesteps(timesteps):
         log.debug(f'Sampler set options: timesteps={timesteps}')
         shared.opts.schedulers_timesteps = timesteps
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_spacing(spacing):
         log.debug(f'Sampler set options: spacing={spacing}')
         shared.opts.schedulers_timestep_spacing = spacing
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_sigma(sampler_sigma):
         log.debug(f'Sampler set options: sigma={sampler_sigma}')
         shared.opts.schedulers_sigma = sampler_sigma
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_order(sampler_order):
         log.debug(f'Sampler set options: order={sampler_order}')
         shared.opts.schedulers_solver_order = sampler_order
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_prediction(sampler_prediction):
         log.debug(f'Sampler set options: prediction={sampler_prediction}')
         shared.opts.schedulers_prediction_type = sampler_prediction
-        shared.opts.save(silent=True)
-
-    def set_sampler_beta(sampler_beta):
-        log.debug(f'Sampler set options: beta={sampler_beta}')
-        shared.opts.schedulers_beta_schedule = sampler_beta
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
     def set_sampler_shift(sampler_shift, sampler_base_shift, sampler_max_shift):
         log.debug(f'Sampler set options: shift={sampler_shift} base={sampler_base_shift} max={sampler_max_shift}')
         shared.opts.schedulers_shift = sampler_shift
         shared.opts.schedulers_base_shift = sampler_base_shift
         shared.opts.schedulers_max_shift = sampler_max_shift
-        shared.opts.save(silent=True)
+        save_with_debounce()
+
+    def set_sampler_seq_lens(base_image_seq_len, max_image_seq_len):
+        log.debug(f'Sampler set options: base_image_seq_len={base_image_seq_len} max_image_seq_len={max_image_seq_len}')
+        shared.opts.schedulers_base_image_seq_len = base_image_seq_len
+        shared.opts.schedulers_max_image_seq_len = max_image_seq_len
+        save_with_debounce()
+
+    def set_sampler_beta(sampler_beta):
+        log.debug(f'Sampler set options: beta={sampler_beta}')
+        shared.opts.schedulers_beta_schedule = sampler_beta
+        save_with_debounce()
 
     def set_sigma_adjust(val, start, end):
         log.debug(f'Sampler set options: sigma={val} min={start} max={end}')
         shared.opts.schedulers_sigma_adjust = val
         shared.opts.schedulers_sigma_adjust_min = start
         shared.opts.schedulers_sigma_adjust_max = end
-        shared.opts.save(silent=True)
+        save_with_debounce()
 
-    # 'linear', 'scaled_linear', 'squaredcos_cap_v2'
     def set_sampler_preset(preset):
         if preset == 'AYS SD15':
             return '999,850,736,645,545,455,343,233,124,24'
@@ -297,7 +459,7 @@ def create_sampler_options(tabname):
         sampler_prediction = gr.Dropdown(label='Prediction method', elem_id=f"{tabname}_sampler_prediction", choices=['default', 'epsilon', 'sample', 'v_prediction', 'flow_prediction'], value=shared.opts.schedulers_prediction_type, type='value')
     with gr.Row(elem_classes=['flex-break']):
         sampler_presets = gr.Dropdown(label='Timesteps presets', elem_id=f"{tabname}_sampler_presets", choices=['None', 'AYS SD15', 'AYS SDXL'], value='None', type='value')
-        sampler_timesteps = gr.Textbox(label='Timesteps override', elem_id=f"{tabname}_sampler_timesteps", value=shared.opts.schedulers_timesteps)
+        sampler_timesteps = gr.Textbox(label='Timesteps override', elem_id=f"{tabname}_sampler_timesteps", value=timesteps_value)
     with gr.Row(elem_classes=['flex-break']):
         sampler_sigma_adjust_val = gr.Slider(minimum=0.5, maximum=1.5, step=0.01, label='Sigma adjust', value=shared.opts.schedulers_sigma_adjust, elem_id=f"{tabname}_sampler_sigma_adjust")
         sampler_sigma_adjust_min = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label='Adjust start', value=shared.opts.schedulers_sigma_adjust_min, elem_id=f"{tabname}_sampler_sigma_adjust_min")
@@ -309,6 +471,9 @@ def create_sampler_options(tabname):
         sampler_base_shift = gr.Slider(minimum=0, maximum=10, step=0.01, label="Base shift", value=shared.opts.schedulers_base_shift, elem_id=f"{tabname}_sampler_base_shift")
         sampler_max_shift = gr.Slider(minimum=0, maximum=10, step=0.01, label="Max shift", value=shared.opts.schedulers_max_shift, elem_id=f"{tabname}_sampler_max_shift")
     with gr.Row(elem_classes=['flex-break']):
+        sampler_base_image_seq_len = gr.Slider(minimum=0, maximum=1024, step=16, label='Sampler base seq', value=shared.opts.schedulers_base_image_seq_len, elem_id=f"{tabname}_sampler_base_image_seq_len")
+        sampler_max_image_seq_len = gr.Slider(minimum=0, maximum=16284, step=16, label='Sampler max seq', value=shared.opts.schedulers_max_image_seq_len, elem_id=f"{tabname}_sampler_max_image_seq_len")
+    with gr.Row(elem_classes=['flex-break']):
         options = ['low order', 'thresholding', 'dynamic', 'rescale']
         values = []
         values += ['low order'] if shared.opts.data.get('schedulers_use_loworder', True) else []
@@ -319,19 +484,80 @@ def create_sampler_options(tabname):
     with gr.Row(elem_classes=['flex-break']):
         sampler_fallback = gr.Checkbox(label='Fallback on invalid', value=shared.opts.schedulers_fallback, elem_id=f"{tabname}_sampler_fallback")
 
+    ui_fields = [
+        ('schedulers_sigma', sampler_sigma),
+        ('schedulers_timestep_spacing', sampler_spacing),
+        ('schedulers_beta_schedule', sampler_beta),
+        ('schedulers_prediction_type', sampler_prediction),
+        ('sampler_presets', sampler_presets),
+        ('schedulers_timesteps', sampler_timesteps),
+        ('schedulers_sigma_adjust', sampler_sigma_adjust_val),
+        ('schedulers_sigma_adjust_min', sampler_sigma_adjust_min),
+        ('schedulers_sigma_adjust_max', sampler_sigma_adjust_max),
+        ('schedulers_solver_order', sampler_order),
+        ('schedulers_shift', sampler_shift),
+        ('schedulers_base_shift', sampler_base_shift),
+        ('schedulers_max_shift', sampler_max_shift),
+        ('schedulers_base_image_seq_len', sampler_base_image_seq_len),
+        ('schedulers_max_image_seq_len', sampler_max_image_seq_len),
+        ('sampler_options', sampler_options),
+    ]
+
+    def set_sampler_defaults(name):
+        if name == 'Default':
+            values = {
+                field[0]: saved_defaults.get(field[0], shared.opts.get_default(field[0]))
+                for field in ui_fields
+                if field[0] not in {'sampler_presets', 'sampler_options'}
+            }
+            values.update({
+                key: saved_defaults.get(key, shared.opts.get_default(key))
+                for key in (
+                    'schedulers_use_loworder',
+                    'schedulers_use_thresholding',
+                    'schedulers_dynamic_shift',
+                    'schedulers_rescale_betas',
+                )
+            })
+            shared.opts.schedulers_beta_schedule = values['schedulers_beta_schedule']
+        else:
+            values = sampler_ui_defaults(name)
+            if values is None:
+                return [gr.update() for _ in ui_fields]
+            values['schedulers_sigma'] = 'default'
+            shared.opts.schedulers_beta_schedule = 'default'
+        values['sampler_presets'] = 'None'
+        values['sampler_options'] = [
+            label for key, label in (
+                ('schedulers_use_loworder', 'low order'),
+                ('schedulers_use_thresholding', 'thresholding'),
+                ('schedulers_dynamic_shift', 'dynamic'),
+                ('schedulers_rescale_betas', 'rescale'),
+            ) if values[key]
+        ]
+        return [gr.update(value=values[field[0]]) for field in ui_fields]
+
+    sampler_dropdown = _sampler_dropdowns.get(tabname)
+    if sampler_dropdown is not None:
+        sampler_dropdown.change(fn=set_sampler_defaults, inputs=[sampler_dropdown], outputs=[field[1] for field in ui_fields])
+
     sampler_sigma.change(fn=set_sampler_sigma, inputs=[sampler_sigma], outputs=[])
     sampler_spacing.change(fn=set_sampler_spacing, inputs=[sampler_spacing], outputs=[])
     sampler_presets.change(fn=set_sampler_preset, inputs=[sampler_presets], outputs=[sampler_timesteps])
     sampler_timesteps.change(fn=set_sampler_timesteps, inputs=[sampler_timesteps], outputs=[])
-    sampler_beta.change(fn=set_sampler_beta, inputs=[sampler_beta], outputs=[])
     sampler_prediction.change(fn=set_sampler_prediction, inputs=[sampler_prediction], outputs=[])
+    sampler_beta.change(fn=set_sampler_beta, inputs=[sampler_beta], outputs=[])
     sampler_order.change(fn=set_sampler_order, inputs=[sampler_order], outputs=[])
     sampler_shift.change(fn=set_sampler_shift, inputs=[sampler_shift, sampler_base_shift, sampler_max_shift], outputs=[])
+    sampler_base_shift.change(fn=set_sampler_shift, inputs=[sampler_shift, sampler_base_shift, sampler_max_shift], outputs=[])
+    sampler_max_shift.change(fn=set_sampler_shift, inputs=[sampler_shift, sampler_base_shift, sampler_max_shift], outputs=[])
     sampler_options.change(fn=set_sampler_options, inputs=[sampler_options], outputs=[])
     sampler_fallback.change(fn=set_sampler_fallback, inputs=[sampler_fallback], outputs=[])
     sampler_sigma_adjust_val.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
     sampler_sigma_adjust_min.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
     sampler_sigma_adjust_max.change(fn=set_sigma_adjust, inputs=[sampler_sigma_adjust_val, sampler_sigma_adjust_min, sampler_sigma_adjust_max], outputs=[])
+    sampler_base_image_seq_len.change(fn=set_sampler_seq_lens, inputs=[sampler_base_image_seq_len, sampler_max_image_seq_len], outputs=[])
+    sampler_max_image_seq_len.change(fn=set_sampler_seq_lens, inputs=[sampler_base_image_seq_len, sampler_max_image_seq_len], outputs=[])
 
 
 def create_hires_inputs(tab):
@@ -342,7 +568,9 @@ def create_hires_inputs(tab):
         with gr.Row(elem_id=f"{tab}_hires_fix_row2"):
             hr_force = gr.Checkbox(label='Force HiRes', value=False, elem_id=f"{tab}_hr_force")
         with gr.Row(elem_id=f"{tab}_hires_fix_row2"):
-            hr_sampler_index = gr.Dropdown(label='Refine sampler', elem_id=f"{tab}_sampling_alt", choices=[x.name for x in sd_samplers.samplers], value='Same as primary', type="index")
+            dropdown_choices, _default_value, filtered = sampler_choices(selected='Same as primary', same_as_primary=True)
+            hr_sampler_index = gr.Dropdown(label='Refine sampler', elem_id=f"{tab}_sampling_alt", choices=dropdown_choices, value='Same as primary', type="value")
+            create_filter_indicator(tab, 'Sampler', filtered)
         with gr.Row(elem_id=f"{tab}_hires_row2"):
             hr_second_pass_steps = gr.Slider(minimum=0, maximum=99, step=1, label='HiRes steps', elem_id=f"{tab}_steps_alt", value=20)
             denoising_strength = gr.Slider(minimum=0.0, maximum=0.99, step=0.01, label='Strength', value=0.3, elem_id=f"{tab}_denoising_strength")
@@ -365,11 +593,24 @@ def create_resize_inputs(tab, images, accordion=True, latent=False, non_zero=Tru
                 available_upscalers = ['None']
             if not latent:
                 available_upscalers = [x for x in available_upscalers if not x.lower().startswith('latent')]
+            available_upscalers, filtered = upscaler_choices(available_upscalers, available_upscalers[0])
             resize_mode = gr.Dropdown(label=f"Mode{prefix}" if non_zero else "Resize mode", elem_id=f"{tab}_resize_mode", choices=shared.resize_modes, type="index", value='Fixed')
             resize_name = gr.Dropdown(label=f"Method{prefix}" if non_zero else "Resize method", elem_id=f"{tab}_resize_name", choices=available_upscalers, value=available_upscalers[0], visible=True)
+            create_filter_indicator(tab, 'Upscaler', filtered)
             resize_context_choices = ["Add with forward", "Remove with forward", "Add with backward", "Remove with backward"]
             resize_context = gr.Dropdown(label=f"Context{prefix}", elem_id=f"{tab}_resize_context", choices=resize_context_choices, value=resize_context_choices[0], visible=False)
-            resize_refresh_btn = ui_common.create_refresh_button(resize_name, modelloader.load_upscalers, lambda: {"choices": modelloader.load_upscalers()}, f'{tab}_upscalers_refresh')
+
+            def refresh_upscaler_choices(selected):
+                modelloader.load_upscalers()
+                refreshed = [upscaler.name for upscaler in shared.sd_upscalers]
+                if not latent:
+                    refreshed = [name for name in refreshed if not name.lower().startswith('latent')]
+                refreshed, _ = upscaler_choices(refreshed, selected)
+                value = selected if selected in refreshed else refreshed[0]
+                return gr.update(choices=refreshed, value=value)
+
+            resize_refresh_btn = ToolButton(value=ui_symbols.refresh, elem_id=f'{tab}_upscalers_refresh')
+            resize_refresh_btn.click(fn=refresh_upscaler_choices, inputs=[resize_name], outputs=[resize_name], show_progress='hidden')
 
             def resize_mode_change(mode):
                 if mode is None or mode == 0:

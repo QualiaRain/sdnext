@@ -3,6 +3,7 @@ import re
 import sys
 import logging
 import socket
+import json
 from functools import partial, partialmethod
 from logging.handlers import RotatingFileHandler
 
@@ -39,6 +40,31 @@ def get_console():
 
 def get_log():
     return log
+
+
+def get_console_theme_file():
+    root = os.path.dirname(os.path.dirname(__file__))
+    theme_file = os.environ.get('SD_CONSOLE_THEME')
+    if not theme_file:
+        theme_file = os.path.join('data', 'console.json')
+    elif not os.path.isabs(theme_file):
+        theme_file = os.path.join(root, theme_file)
+    return theme_file
+
+
+def load_console_theme():
+    theme_file = get_console_theme_file()
+    if not os.path.isabs(theme_file):
+        theme_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), theme_file)
+    try:
+        with open(theme_file, encoding='utf-8') as file:
+            styles = json.load(file)
+        if not isinstance(styles, dict):
+            raise ValueError('console theme must be a JSON object')
+        return Theme(styles)
+    except Exception as e:
+        log.warning(f'Failed to load console theme: {e}')
+        return Theme()
 
 
 def install_traceback(suppress: list | None = None):
@@ -182,21 +208,14 @@ def setup_logging(debug=None, trace=None, filename=None):
             render_options = render_options.update_height(height=render_options.height - self.top - self.bottom)
         lines = console.render_lines(self.renderable, render_options, style=style, pad=False)
         _Segment = Segment
-        left = _Segment(" " * self.left, style) if self.left else None
         right = [_Segment.line()]
         blank_line: list[Segment] | None = None
         if self.top:
             blank_line = [_Segment(f'{" " * width}\\n', style)]
             yield from blank_line * self.top
-        if left:
-            for line in lines:
-                yield left
-                yield from line
-                yield from right
-        else:
-            for line in lines:
-                yield from line
-                yield from right
+        for line in lines: # self.left is forced to 0 above, so no left-padding segment is ever emitted
+            yield from line
+            yield from right
         if self.bottom:
             blank_line = blank_line or [_Segment(f'{" " * width}\\n', style)]
             yield from blank_line * self.bottom
@@ -232,26 +251,20 @@ def setup_logging(debug=None, trace=None, filename=None):
     log.setLevel(logging.DEBUG) # log to file is always at level debug for facility `sd`
     log.print = rprint
 
-    theme = Theme({
-        "traceback.border": "black",
-        "inspect.value.border": "black",
-        "traceback.border.syntax_error": "dark_red",
-        "logging.level.info": "blue_violet",
-        "logging.level.debug": "purple4",
-        "logging.level.trace": "dark_blue",
-    })
+    theme = load_console_theme()
 
     Padding.__rich_console__ = override_padding
     box.ROUNDED = box.SIMPLE
     patch_traceback_panel()
-    console = Console(
-        log_time=True,
-        log_time_format='%H:%M:%S-%f',
-        tab_size=4,
-        soft_wrap=True,
-        safe_box=True,
-        theme=theme,
-    )
+    if console is None: # created once: modules bind this name at import time and progress bars must share the console the handler prints on
+        console = Console(
+            log_time=True,
+            log_time_format='%H:%M:%S-%f',
+            tab_size=4,
+            soft_wrap=True,
+            safe_box=True,
+            theme=theme,
+        )
 
     logging.basicConfig(level=logging.ERROR, format='%(asctime)s | %(name)s | %(levelname)s | %(module)s | %(message)s', handlers=[logging.NullHandler()]) # redirect default logger to null
 
@@ -263,7 +276,7 @@ def setup_logging(debug=None, trace=None, filename=None):
 
     log_filter = LogFilter()
     # handlers
-    rh = RichHandler(show_time=True, omit_repeated_times=False, show_level=True, show_path=False, markup=False, rich_tracebacks=True, log_time_format='%H:%M:%S-%f', level=level, console=console)
+    rh = RichHandler(show_time=True, omit_repeated_times=False, show_level=True, show_path=False, markup=True, rich_tracebacks=True, log_time_format='%H:%M:%S-%f', level=level, console=console)
     if trace:
         rh.formatter = logging.Formatter('[%(module)s][%(pathname)s:%(lineno)d]  %(message)s')
     rh.addFilter(log_filter)
@@ -312,3 +325,12 @@ def setup_logging(debug=None, trace=None, filename=None):
         logging.getLogger("torch").setLevel(logging.DEBUG)
     else:
         logging.getLogger("torch").setLevel(logging.WARNING)
+
+
+if __name__ == "__main__":
+    setup_logging(debug=True, trace=False, filename=None)
+    for l in [logging.TRACE, logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL]:
+        log.log(l, f"Test log level: {logging.getLevelName(l)}")
+    values = [None, True, False, "yes", "no", "sd.next", 1, 0, 1.0, [1,2,3], {"key": "value"}, (1,2), {1,2}, object()]
+    for v in values:
+        log.info(f"Test values: {type(v).__name__}={v}")

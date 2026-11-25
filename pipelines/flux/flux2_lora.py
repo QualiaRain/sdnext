@@ -64,8 +64,6 @@ BARE_FLUX_PREFIXES = (
     "double_stream_modulation_",
 )
 
-BARE_DIFFUSERS_PREFIXES = ("single_transformer_blocks.", "transformer_blocks.")
-
 
 # === BFL to diffusers mapping ===
 
@@ -161,8 +159,6 @@ def parse_key(key, suffixes):
     return native_adapter.parse_key(
         key, suffixes,
         prefixes=KNOWN_PREFIXES,
-        bare_prefixes=BARE_FLUX_PREFIXES,
-        bare_diffusers_prefixes=BARE_DIFFUSERS_PREFIXES,
     )
 
 
@@ -171,8 +167,6 @@ def group_by_suffixes(state_dict, suffixes):
     return native_adapter.group_by_suffixes(
         state_dict, suffixes,
         prefixes=KNOWN_PREFIXES,
-        bare_prefixes=BARE_FLUX_PREFIXES,
-        bare_diffusers_prefixes=BARE_DIFFUSERS_PREFIXES,
     )
 
 
@@ -183,15 +177,16 @@ def resolve_targets(prefix_used, base):
     """Return ``[(diffusers_path, ChunkSpec | None), ...]`` for a parsed group key.
 
     For ``lora_unet_`` prefix, applies ``KOHYA_SUFFIX_MAP`` then ``F2_*_MAP``.
-    For BFL / bare-BFL, applies ``F2_*_MAP`` directly. Unrecognized prefixes
-    return an empty list.
+    For BFL and bare keys, applies ``F2_*_MAP`` directly; a bare path the maps
+    do not know binds verbatim upstream. Unrecognized prefixes return an empty
+    list.
 
     Universal passthrough prefixes (including ``lycoris_``) are handled
     upstream by :func:`native_adapter.resolve_group_targets`.
     """
     if prefix_used == "lora_unet_":
         return _kohya_to_diffusers_targets(base)
-    if prefix_used in (None, "diffusion_model."):
+    if prefix_used in (BARE_DIFFUSERS_PREFIX_USED, "diffusion_model."):
         return _bfl_to_diffusers_targets(base)
     return []
 
@@ -256,8 +251,6 @@ def _bfl_to_diffusers_targets(base):
 _BIND_KWARGS = dict(
     resolve_targets=resolve_targets,
     prefixes=KNOWN_PREFIXES,
-    bare_prefixes=BARE_FLUX_PREFIXES,
-    bare_diffusers_prefixes=BARE_DIFFUSERS_PREFIXES,
     arch_name="f2",
 )
 
@@ -315,7 +308,7 @@ def apply_lora_alphas(state_dict):
     ``lora_down``/``lora_up``) keys. Kohya-format LoRAs store per-layer alpha
     values as separate ``.alpha`` keys that the converter does not consume,
     causing a ``ValueError`` on leftover keys. This matches the approach used
-    by ``_convert_kohya_flux_lora_to_diffusers`` for Flux 1.
+    by the diffusers kohya Flux converter.
     """
     alpha_keys = [k for k in state_dict if k.endswith(".alpha")]
     if not alpha_keys:
@@ -400,6 +393,6 @@ def apply_patch():
                         pretrained_model_name_or_path_or_dict = apply_lora_alphas(sd)
                 except Exception:
                     pass
-        return original_lora_state_dict(cls, pretrained_model_name_or_path_or_dict, **kwargs)
+        return original_lora_state_dict(cls, pretrained_model_name_or_path_or_dict, **kwargs) # pylint: disable=too-many-function-args
 
     Flux2LoraLoaderMixin.lora_state_dict = patched_lora_state_dict

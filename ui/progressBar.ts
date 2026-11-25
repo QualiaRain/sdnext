@@ -4,7 +4,7 @@ import { sendNotification } from './notification';
 
 let lastState: any = {};
 let refreshInterval = 10000;
-const progressTimeout = 180;
+const progressTimeout = 600;
 const startTimeout = 5;
 
 export function setRefreshInterval() {
@@ -121,11 +121,13 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
   let dateStart = Date.now();
   let prevProgress: any = null;
   const parentGallery = galleryEl ? galleryEl.parentNode : null;
+  const initialGalleryImages = Array.from<any>(galleryEl?.querySelectorAll('img') || []).map((image) => image.src);
   let livePreview: HTMLElement | undefined;
   let img: HTMLImageElement;
 
   const initLivePreview = () => {
     if (!parentGallery) return;
+    debug('initLivePreview', { el: galleryEl, parent: parentGallery });
     const footers = Array.from<any>(gradioApp().querySelectorAll('.gallery_footer'));
     for (const footer of footers) {
       if (footer.id !== 'gallery_footer') footer.style.display = 'none'; // remove all footers
@@ -163,9 +165,10 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
     try {
       if (parentGallery && livePreview) {
         if (useImage) {
-          const previewImg = gradioApp().querySelector('#livePreviewImage');
-          const galleryImg = parentGallery.querySelector('img');
-          if (previewImg?.src && galleryImg) galleryImg.src = previewImg.src; // copy preview to gallery if everything is ok
+          const galleryImages = Array.from<any>(galleryEl?.querySelectorAll('img') || []);
+          const galleryUnchanged = galleryImages.length === initialGalleryImages.length && galleryImages.every((image, index) => image.src === initialGalleryImages[index]);
+          const galleryImg = galleryImages[0];
+          if (galleryUnchanged && img?.src && galleryImg) galleryImg.src = img.src;
         }
         parentGallery.removeChild(livePreview);
       }
@@ -182,7 +185,7 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
 
   const previewVisible = () => {
     try {
-      return !galleryEl?.closest('.section')?.classList.contains('minimize');
+      return galleryEl ? !galleryEl.closest('.section')?.classList.contains('minimize') : true;
     } catch {
       return true;
     }
@@ -201,12 +204,12 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
     }
     if (elapsedFromStart > progressTimeout && !res.queued && res.progress === prevProgress) {
       debug('progress', { end: res, reason: 'progressTimeout' });
-      if (!res.paused) removeLivePreview(false); // only abort if not paused
+      if (!res.paused) removeLivePreview(); // only abort if not paused
       return;
     }
     if (elapsedFromStart > startTimeout && !res.queued && !res.active) {
       debug('progress', { end: res, reason: 'startTimeout' });
-      if (!res.paused) removeLivePreview(false); // only abort if not paused
+      if (!res.paused) removeLivePreview(); // only abort if not paused
       return;
     }
     if (res.progress !== prevProgress) {
@@ -229,7 +232,7 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
 
   const onProgressErrorHandler = (err) => {
     error('progress', { error: err });
-    removeLivePreview(false);
+    removeLivePreview();
   };
 
   const startLivePreview = (taskId: string, id_live_preview: number) => {

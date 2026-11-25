@@ -11,24 +11,37 @@ from modules.json_helpers import readfile
 version_map = {
     "QwenEdit": "Qwen",
     "QwenEditPlus": "Qwen",
+    "Qwen21": "Qwen 2.1",
     "Flux.1 D": "Flux",
     "Flux.1 S": "Flux",
     "FluxKontext": "Flux",
     "SDXL 1.0": "SD XL",
     "SDXL Hyper": "SD XL",
     "StableDiffusion": "SD 1.5",
+    "StableDiffusion2": "SD 2.1",
+    "SD-v21": "SD 2.1",
     "StableDiffusion3": "SD 3",
     "StableDiffusionXL": "SD XL",
+    "Ming": "Ming-Image",
     "WanToVideo": "Wan",
     "WanVACE": "Wan",
-    "Z": "Z-Image",
     "Glm": "GLM-Image",
+    "BriaFibo2": "Bria Fibo 2",
     "Krea2": "Krea 2",
     "AnimaTextTo": "Anima",
     "Ideogram4": "Ideogram 4",
+    "MOSSImage": "MOSS-Image",
     "Flux2": "Flux 2",
     "Flux2Klein": "Flux 2 Klein",
     "Flux2KleinKV": "Flux 2 Klein",
+    "Flux3": "Flux 3 Klein",
+    "Flux3Distilled": "Flux 3 Klein",
+    "Flux-3": "Flux 3 Klein",
+    "MiniMaxH3": "MiniMax H3",
+    "MiniMax_H3": "MiniMax H3",
+    "ZImageTurbo": "Z-Image",
+    "ZImage": "Z-Image",
+    "Z": "Z-Image",
 }
 
 class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
@@ -106,6 +119,7 @@ class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
                 primary = tag.split(',')[0].strip() if len(tag) > 0 else ''
             else:
                 primary = ''
+            primary = primary.lower()
 
             if ('nunchaku' in tag) and (devices.backend != 'cuda' and not shared.cmd_opts.experimental):
                 count['hidden'] += 1
@@ -148,6 +162,30 @@ class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
         log.debug(f'Networks: type="reference" {count}')
         return models
 
+    def get_version(self, checkpoint, record):
+        info = self.find_version(checkpoint, record['info'])
+        if 'baseModel' in info:
+            version = info.get("baseModel", "")
+        elif '_class_name' in record['info']:
+            cls = record['info']['_class_name']
+            if isinstance(cls, list):
+                cls = cls[-1]
+            version = cls.replace('Pipeline', '').replace('Image', '').replace('Modular', '')
+        else:
+            version = ''
+        version = version_map.get(version, version)
+        if len(version.strip()) == 0: # no match => check if version is part of the key in version_map
+            for key in version_map.keys():
+                if key.lower() in record['name'].lower():
+                    version = version_map[key]
+                    break
+        if shared.cmd_opts.test:
+            if version:
+                log.debug(f'Local model: name="{checkpoint.name}" version="{version}"')
+            else:
+                log.warning(f'Local model: name="{checkpoint.name}" version="{version}"')
+        return version
+
     def create_item(self, name):
         record = None
         try:
@@ -166,18 +204,7 @@ class ExtraNetworksPageCheckpoints(ui_extra_networks.ExtraNetworksPage):
             }
             record['info'] = self.find_info(checkpoint.filename)
             record['description'] = self.find_description(checkpoint.filename, record['info'])
-            version = self.find_version(checkpoint, record['info'])
-            if 'baseModel' in version:
-                record['version'] = version.get("baseModel", "")
-            elif '_class_name' in record['info']:
-                cls = record['info']['_class_name']
-                if isinstance(cls, list):
-                    cls = cls[-1]
-                record['version'] = cls.replace('Pipeline', '').replace('Image', '').replace('Modular', '')
-            else:
-                record['version'] = ''
-            record['version'] = version_map.get(record['version'], record['version'])
-
+            record['version'] = self.get_version(checkpoint, record)
         except Exception as e:
             log.error(f'Networks error: type=model file="{name}" {e}')
             if os.environ.get('SD_EN_DEBUG', None) is not None:

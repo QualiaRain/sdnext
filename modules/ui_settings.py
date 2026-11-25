@@ -1,7 +1,7 @@
 import os
 import gradio as gr
 from modules import timer, shared, paths, theme, sd_models, modelloader, generation_parameters_copypaste, call_queue, script_callbacks
-from modules import ui_common, ui_loadsave, ui_history, ui_storage, ui_components, ui_symbols
+from modules import ui_common, ui_loadsave, ui_history, ui_storage, ui_benchmark, ui_components, ui_symbols
 from modules.logger import log
 
 
@@ -135,16 +135,6 @@ def run_settings(*args):
         from modules.onnx_impl import install_olive, initialize_onnx_pipelines
         install_olive()
         initialize_onnx_pipelines()
-    if shared.cmd_opts.use_openvino:
-        if "Model" not in shared.opts.cuda_compile:
-            log.warning("OpenVINO: Overriding Torch Compile Model")
-            shared.opts.cuda_compile.append("Model")
-        if shared.opts.cuda_compile_backend != shared.opts.openvino_compile_backend:
-            log.warning(f"OpenVINO: Overriding Torch Compile backend={shared.opts.openvino_compile_backend}")
-            shared.opts.cuda_compile_backend = shared.opts.openvino_compile_backend
-        if shared.opts.diffusers_offload_mode != "none":
-            log.warning("OpenVINO: Overriding diffusers_offload_mode=none")
-            shared.opts.diffusers_offload_mode = "none"
     if shared.opts.sd_backend != "diffusers":
         log.error('Legacy option: backend=original is no longer supported')
         shared.opts.sd_backend = "diffusers"
@@ -268,8 +258,9 @@ def create_ui(disabled_tabs=None):
                         item for item in shared.opts.data_labels.items()
                         if item[1].section is not None and item[1].section[0] == section_id
                     ] # find all items in this section
-                    hidden = section_id is None or 'hidden' in section_id.lower() or 'hidden' in section_text.lower()
-                    # log.trace(f'Settings: section="{section_id}" title="{section_text}" items={len(items)} hidden={hidden}')
+                    hidden = (section_id is None) or ('hidden' in section_id.lower()) or ('hidden' in section_text.lower()) or ('legacy' in section_id.lower()) or ('legacy' in section_text.lower())
+                    # for (key, _item) in items:
+                    #     log.trace(f'Settings: id={section_id} text={section_text} key={key} hidden={hidden}')
                     if hidden:
                         for (key, _item) in items:
                             hidden_list.append(key)
@@ -282,7 +273,7 @@ def create_ui(disabled_tabs=None):
                                     quicksettings_list.append((key, item))
                                     components.append(dummy_component)
                                 else:
-                                    with gr.Row(elem_id=f"settings_section_row_{section_id}", elem_classes=["settings_section"]): # only so we can add dirty indicator at the start of the row
+                                    with gr.Row(elem_id=f"settings_section_row_{section_id}", elem_classes=["settings_section"]):
                                         component = create_setting_component(key)
                                         shared.settings_components[key] = component
                                         current_items.append(key)
@@ -316,6 +307,10 @@ def create_ui(disabled_tabs=None):
             with gr.TabItem("Storage", id="system_storage", elem_id="tab_storage"):
                 ui_storage.create_ui()
 
+        if 'benchmark' not in disabled_tabs:
+            with gr.TabItem("Benchmark", id="system_benchmark", elem_id="tab_benchmark"):
+                ui_benchmark.create_ui()
+
         if 'monitor' not in disabled_tabs:
             with gr.TabItem("GPU Monitor", id="system_gpu", elem_id="tab_gpu"):
                 with gr.Row(elem_id='gpu-controls'):
@@ -341,7 +336,7 @@ def create_ui(disabled_tabs=None):
     if request_notifications:
         request_notifications.click(fn=lambda: None, inputs=[], outputs=[], _js='function(){}')
     settings_submit.click(
-        fn=call_queue.wrap_gradio_call(run_settings, extra_outputs=[gr.update()]),
+        fn=call_queue.wrap_gradio_call(run_settings, extra_outputs=[gr.update()], track_state=False),
         inputs=components,
         outputs=[text_settings, result],
     )
@@ -352,8 +347,8 @@ def create_ui(disabled_tabs=None):
 def reset_quicksettings(quick_components):
     quick_components = quick_components.split(',')
     updates = []
+    log.warning(f'Reset: settings={quick_components}')
     for key in quick_components:
-        log.warning(f'Reset: setting={key}')
         updates.append(gr.update(value=shared.opts.get_default(key)))
     return updates
 

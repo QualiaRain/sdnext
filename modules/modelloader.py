@@ -135,6 +135,10 @@ def download_diffusers_model(hub_id: str, cache_dir: str | None = None, download
 
 def load_diffusers_models(clear=True):
     # t0 = time.time()
+    def has_component_layout(path):
+        components = ('transformer/config.json', 'text_encoder/config.json', 'vae/config.json', 'scheduler/scheduler_config.json')
+        return all(os.path.isfile(os.path.join(path, component)) for component in components)
+
     place = shared.opts.diffusers_dir
     if place is None or len(place) == 0 or not os.path.isdir(place):
         place = os.path.join(paths.models_path, 'Diffusers')
@@ -157,7 +161,7 @@ def load_diffusers_models(clear=True):
                     index_file = os.path.join(folder, 'modular_model_index.json') # modular pipelines carry their own index flavor
                 has_index = os.path.exists(index_file)
 
-                if has_index: # direct download of diffusers model
+                if has_index or has_component_layout(folder): # direct download of diffusers model
                     repo = { 'name': name, 'filename': name, 'friendly': friendly, 'folder': folder, 'path': folder, 'hash': None, 'mtime': os.path.getmtime(folder), 'model_info': os.path.join(folder, 'model_info.json'), 'model_index': index_file }
                     diffuser_repos.append(repo)
                     continue
@@ -174,7 +178,7 @@ def load_diffusers_models(clear=True):
                     if not os.path.exists(index):
                         index = os.path.join(commit, "modular_model_index.json") # modular pipelines carry their own index flavor
                     config = os.path.join(commit, "config.json")
-                    if (not os.path.exists(index)) and (not os.path.exists(info)) and (not os.path.exists(config)):
+                    if (not os.path.exists(index)) and (not os.path.exists(info)) and (not os.path.exists(config)) and not has_component_layout(commit):
                         debug(f'Diffusers skip model no info: {name}')
                         continue
                     if name in already_found:
@@ -205,9 +209,9 @@ def find_diffuser(name: str, full=False):
         suffix = '/'.join(parts[2:]) # subfolder
         if len(suffix) > 0:
             suffix = '/' + suffix
-    models = list(hf_api.list_models(model_name=name, filter="diffusers", full=True, limit=20, sort="downloads"))
+    models = list(hf_api.list_models(search=name, filter="diffusers", full=True, limit=20, sort="downloads"))
     if len(models) == 0:
-        models = list(hf_api.list_models(model_name=name, full=True, limit=20, sort="downloads")) # widen search
+        models = list(hf_api.list_models(search=name, full=True, limit=20, sort="downloads")) # widen search
     models = [m for m in models if m.id.startswith(name)] # filter exact
     log.debug(f'Search model: repo="{name}" {len(models) > 0}')
     if len(models) > 0:
@@ -285,7 +289,7 @@ def load_civitai(model: str, url: str):
     else:
         log.debug(f'Reference download start: model="{name}"')
         from modules.civitai.download_civitai import download_civit_model
-        download_civit_model(model_url=url, model_name=model, model_path='', model_type='safetensors', token=shared.opts.civitai_token)
+        download_civit_model(model_url=url, model_name=model, model_path='', model_type='Checkpoint', token=shared.opts.civitai_token)
         log.debug(f'Reference download complete: model="{name}"')
         sd_models.list_models()
         info = sd_models.get_closest_checkpoint_match(name)
@@ -490,5 +494,5 @@ def load_upscalers(quiet=False):
     shared.sd_upscalers = upscalers
     t1 = time.time()
     if not quiet:
-        log.info(f"Available Upscalers: items={len(shared.sd_upscalers)} downloaded={len([x for x in shared.sd_upscalers if x.data_path is not None and os.path.isfile(x.data_path)])} user={len([x for x in shared.sd_upscalers if x.custom])} time={t1-t0:.2f} types={upscaler_types}")
+        log.info(f"Available Upscalers: items={len(shared.sd_upscalers)} downloaded={len([x for x in shared.sd_upscalers if x.data_path is not None and os.path.isfile(x.data_path)])} user={len([x for x in shared.sd_upscalers if x.custom])} time={t1-t0:.2f}")
     return [x.name for x in shared.sd_upscalers]

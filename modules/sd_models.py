@@ -55,8 +55,10 @@ pipe_switch_task_exclude = [
     'Kandinsky5I2IPipeline',
     'GoogleNanoBananaPipeline',
     'Step1XEditPipeline',
+    'LLaDAImagePipeline',
     'BooguImagePipeline',
     'BooguImageTurboPipeline',
+    'ObjectClearPipeline',
 ]
 i2i_pipes = [
     'LEditsPPPipelineStableDiffusion', 'LEditsPPPipelineStableDiffusionXL',
@@ -140,6 +142,22 @@ def set_vae_options(sd_model, vae=None, op:str='model', quiet:bool=False):
                         sd_model.vae.tile_overlap_factor = getattr(sd_model.vae, "tile_overlap_factor_backup", sd_model.vae.tile_overlap_factor)
                     ops['tile'] = sd_model.vae.tile_sample_min_size
                     ops['overlap'] = sd_model.vae.tile_overlap_factor
+                elif hasattr(sd_model.vae, 'tile_sample_min_height') and hasattr(sd_model.vae, 'tile_sample_stride_height'): # 3d vaes tile in pixels, blend is tile minus stride
+                    ratio = int(getattr(sd_model.vae, 'spatial_compression_ratio', 8))
+                    if getattr(sd_model.vae, 'tile_sample_min_height_backup', None) is None:
+                        sd_model.vae.tile_sample_min_height_backup = sd_model.vae.tile_sample_min_height
+                        sd_model.vae.tile_sample_stride_height_backup = sd_model.vae.tile_sample_stride_height
+                    if shared.opts.diffusers_vae_tile_size > 0:
+                        tile = max(int(shared.opts.diffusers_vae_tile_size) // ratio, 2) * ratio
+                        stride = max(int(tile * (1 - shared.opts.diffusers_vae_tile_overlap)) // ratio, 1) * ratio
+                    elif ratio >= 16 and sd_model.vae.tile_sample_min_height_backup < 768:
+                        tile, stride = 768, 576 # upstream reuses the 8x tile geometry, whose 4-latent blend at 16x leaves a visible seam grid
+                    else:
+                        tile, stride = sd_model.vae.tile_sample_min_height_backup, sd_model.vae.tile_sample_stride_height_backup
+                    sd_model.vae.tile_sample_min_height = sd_model.vae.tile_sample_min_width = tile
+                    sd_model.vae.tile_sample_stride_height = sd_model.vae.tile_sample_stride_width = stride
+                    ops['tile'] = tile
+                    ops['stride'] = stride
                 sd_model.vae.enable_tiling()
             else:
                 sd_model.vae.disable_tiling()
@@ -374,6 +392,7 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
     shared.sd_model = None
     model_type = detected_model_type.removesuffix('SDNQ').strip()
     try:
+        # explicit load-by-type
         if model_type in ['Stable Cascade']:
             from pipelines.model_stablecascade import load_cascade_combined
             sd_model = load_cascade_combined(checkpoint_info, diffusers_load_config)
@@ -429,6 +448,10 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
         elif model_type in ['FLUX2Klein']:
             from pipelines.model_flux2_klein import load_flux2_klein
             sd_model = load_flux2_klein(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
+        elif model_type in ['FLUX3']:
+            from pipelines.model_flux3 import load_flux3
+            sd_model = load_flux3(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
         elif model_type in ['FLEX']:
             from pipelines.model_flex import load_flex
@@ -502,7 +525,11 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
             from pipelines.model_chrono import load_chrono
             sd_model = load_chrono(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
-        elif model_type in ['Bria']:
+        elif model_type in ['BriaFibo2']:
+            from pipelines.model_bria import load_bria2
+            sd_model = load_bria2(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
+        elif model_type in ['BriaFibo']:
             from pipelines.model_bria import load_bria
             sd_model = load_bria(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
@@ -517,6 +544,10 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
         elif model_type in ['JoyEdit']:
             from pipelines.model_joy import load_joyedit
             sd_model = load_joyedit(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
+        elif model_type in ['Qwen21']:
+            from pipelines.model_qwen21 import load_qwen21
+            sd_model = load_qwen21(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
         elif model_type in ['Qwen']:
             from pipelines.model_qwen import load_qwen
@@ -550,10 +581,6 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
             from pipelines.model_kandinsky import load_kandinsky5
             sd_model = load_kandinsky5(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
-        elif model_type in ['NextStep']:
-            from pipelines.model_nextstep import load_nextstep
-            sd_model = load_nextstep(checkpoint_info, diffusers_load_config) # pylint: disable=assignment-from-none
-            allow_post_quant = False
         elif model_type in ['HunyuanImage']:
             from pipelines.model_hyimage import load_hyimage
             sd_model = load_hyimage(checkpoint_info, diffusers_load_config) # pylint: disable=assignment-from-none
@@ -581,6 +608,14 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
         elif model_type in ['ERNIEImage']:
             from pipelines.model_ernie import load_ernie_image
             sd_model = load_ernie_image(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
+        elif model_type in ['MOSSImage']:
+            from pipelines.model_moss import load_moss_image
+            sd_model = load_moss_image(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
+        elif model_type in ['MingImage']:
+            from pipelines.model_ming_image import load_ming_image
+            sd_model = load_ming_image(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
         elif model_type in ['NucleusImage']:
             from pipelines.model_nucleus import load_nucleus
@@ -610,6 +645,10 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
             from pipelines.model_glm import load_glm_image
             sd_model = load_glm_image(checkpoint_info, diffusers_load_config)
             allow_post_quant = False
+        elif model_type in ['LLaDAImage']:
+            from pipelines.model_llada import load_llada_image
+            sd_model = load_llada_image(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False
         elif model_type in ['SDXS']:
             from pipelines.model_sdxs import load_sdxs
             sd_model = load_sdxs(checkpoint_info, diffusers_load_config)
@@ -622,6 +661,11 @@ def load_diffuser_force(detected_model_type: str, checkpoint_info: CheckpointInf
             from pipelines.model_mageflow import load_mageflow
             sd_model = load_mageflow(checkpoint_info, diffusers_load_config)
             allow_post_quant = True
+        # explicit load-by-name
+        elif 'ObjectClear' in checkpoint_info.name:
+            from pipelines.model_objectclear import load_objectclear
+            sd_model = load_objectclear(checkpoint_info, diffusers_load_config)
+            allow_post_quant = False # not compatible
     except Exception as e:
         log.error(f'Load {op}: path="{checkpoint_info.path}" {e}')
         errors.display(e, 'Load')
@@ -894,7 +938,6 @@ def set_defaults(sd_model, checkpoint_info: CheckpointInfo):
     sd_model.is_sd2 = hasattr(sd_model, 'cond_stage_model') and hasattr(sd_model.cond_stage_model, 'model') # a1111 compatibility item
     sd_model.is_sd1 = not sd_model.is_sd2 # a1111 compatibility item
     sd_model.logvar = sd_model.logvar.to(devices.device) if hasattr(sd_model, 'logvar') else None # fix for training
-    shared.opts.data["sd_checkpoint_hash"] = checkpoint_info.sha256
     if hasattr(sd_model, "set_progress_bar_config"):
         sd_model.set_progress_bar_config(bar_format='Progress {rate_fmt}{postfix} {bar:15} {percentage:3.0f}% {n_fmt}/{total_fmt} {elapsed} {remaining}', ncols=120, colour='#327fba')
 
@@ -1034,6 +1077,12 @@ def load_diffuser(checkpoint_info: CheckpointInfo | None = None, op='model', rev
         if debug_load:
             log.trace(f'Model components: {list(get_signature(sd_model).values())}')
 
+        from modules import modular
+        if modular.is_compatible(shared.sd_model):
+            modular_pipe = modular.convert_to_modular(shared.sd_model)
+            if modular_pipe is not None:
+                shared.sd_model = modular_pipe
+
         from modules import textual_inversion
         sd_model.embedding_db = textual_inversion.EmbeddingDatabase()
         sd_model.embedding_db.add_embedding_dir(shared.opts.embeddings_dir)
@@ -1064,6 +1113,8 @@ def load_diffuser(checkpoint_info: CheckpointInfo | None = None, op='model', rev
     try:
         if shared.opts.ipex_optimize:
             sd_model = sd_models_compile.ipex_optimize(sd_model)
+        if shared.cmd_opts.use_openvino or devices.backend == 'openvino':
+            sd_models_compile.set_openvino_overrides()
 
         if (shared.opts.cuda_compile_backend != 'none') and len(shared.opts.cuda_compile) > 0:
             if 'components' in shared.opts.cuda_compile_options:
@@ -1116,22 +1167,76 @@ class DiffusersTaskType(Enum):
     MODULAR = 5
 
 
-def get_diffusers_task(pipe: diffusers.DiffusionPipeline) -> DiffusersTaskType:
-    cls = pipe.__class__.__name__
-    if cls in i2i_pipes: # special case
+def get_class_task(cls: type) -> DiffusersTaskType:
+    name = cls.__name__
+    if name in i2i_pipes: # special case
         return DiffusersTaskType.IMAGE_2_IMAGE
-    elif 'ImageToVideo' in cls or cls in ['LTXConditionPipeline', 'StableVideoDiffusionPipeline']: # i2v pipelines
+    elif 'ImageToVideo' in name or name in ['LTXConditionPipeline', 'StableVideoDiffusionPipeline']: # i2v pipelines
         return DiffusersTaskType.IMAGE_2_IMAGE
-    elif 'Instruct' in cls:
+    elif 'Instruct' in name:
         return DiffusersTaskType.INSTRUCT
-    elif 'Modular' in cls:
+    elif 'Modular' in name:
         return DiffusersTaskType.MODULAR
-    elif pipe.__class__ in diffusers.pipelines.auto_pipeline.AUTO_IMAGE2IMAGE_PIPELINES_MAPPING.values():
+    elif cls in diffusers.pipelines.auto_pipeline.AUTO_IMAGE2IMAGE_PIPELINES_MAPPING.values():
         return DiffusersTaskType.IMAGE_2_IMAGE
-    elif pipe.__class__ in diffusers.pipelines.auto_pipeline.AUTO_INPAINT_PIPELINES_MAPPING.values():
+    elif cls in diffusers.pipelines.auto_pipeline.AUTO_INPAINT_PIPELINES_MAPPING.values():
         return DiffusersTaskType.INPAINTING
     else:
         return DiffusersTaskType.TEXT_2_IMAGE
+
+
+def get_diffusers_task(pipe: diffusers.DiffusionPipeline) -> DiffusersTaskType:
+    return get_class_task(pipe.__class__)
+
+
+def get_task_mapping(task_type: DiffusersTaskType):
+    mappings = {
+        DiffusersTaskType.TEXT_2_IMAGE: diffusers.pipelines.auto_pipeline.AUTO_TEXT2IMAGE_PIPELINES_MAPPING,
+        DiffusersTaskType.IMAGE_2_IMAGE: diffusers.pipelines.auto_pipeline.AUTO_IMAGE2IMAGE_PIPELINES_MAPPING,
+        DiffusersTaskType.INPAINTING: diffusers.pipelines.auto_pipeline.AUTO_INPAINT_PIPELINES_MAPPING,
+    }
+    return mappings.get(task_type)
+
+
+def pipe_serves_task(pipe: diffusers.DiffusionPipeline, task_type: DiffusersTaskType) -> bool:
+    """True when the pipeline class is registered for the task in the diffusers auto-pipeline tables."""
+    mapping = get_task_mapping(task_type)
+    return mapping is not None and pipe.__class__ in mapping.values()
+
+
+def get_task_class(pipe: diffusers.DiffusionPipeline, task_type: DiffusersTaskType) -> type:
+    """Class set_diffuser_pipe leaves the pipeline in for the task, by its decision order and without switching."""
+    cls = pipe.__class__
+    name = cls.__name__
+    if get_class_task(cls) in (task_type, DiffusersTaskType.MODULAR) or pipe_serves_task(pipe, task_type):
+        return cls
+    if (name in pipe_switch_task_exclude) or ('Video' in name) or ('Onnx' in name):
+        return cls
+    mapping = get_task_mapping(task_type)
+    if mapping is None:
+        return cls
+    if task_type in (DiffusersTaskType.IMAGE_2_IMAGE, DiffusersTaskType.INPAINTING): # set_diffuser_pipe resets these to their parent first
+        name = {'StableDiffusionPAGPipeline': 'StableDiffusionPipeline', 'StableDiffusionXLPAGPipeline': 'StableDiffusionXLPipeline'}.get(name, name)
+    return diffusers.pipelines.auto_pipeline._get_task_class(mapping, name, throw_error_if_not_exist=False) or cls # pylint: disable=protected-access
+
+
+def get_max_condition_images(pipe: diffusers.DiffusionPipeline | None = None) -> int:
+    """Condition images the pipeline takes per prompt, 0 when undeclared; any declaration means the request sets the output size."""
+    if pipe is None:
+        pipe = shared.sd_model
+    return int(getattr(pipe, 'max_condition_images', 0) or 0)
+
+
+def takes_condition_set(pipe: diffusers.DiffusionPipeline | None = None) -> bool:
+    """True when an image list is one set of condition images shared by every prompt, not one image per sample."""
+    return get_max_condition_images(pipe) > 1
+
+
+def takes_single_prompt(pipe: diffusers.DiffusionPipeline | None = None) -> bool:
+    """True when the pipeline encodes one prompt per call and batches through num_images_per_prompt."""
+    if pipe is None:
+        pipe = shared.sd_model
+    return bool(getattr(pipe, 'single_prompt', False))
 
 
 def switch_pipe(cls: type[diffusers.DiffusionPipeline] | str, pipeline: diffusers.DiffusionPipeline | None = None, force = False, args: dict | None = None):
@@ -1244,7 +1349,7 @@ def switch_pipe(cls: type[diffusers.DiffusionPipeline] | str, pipeline: diffuser
 
 
 def clean_diffuser_pipe(pipe):
-    if pipe is not None and shared.sd_model_type == 'sdxl' and hasattr(pipe, 'config') and 'requires_aesthetics_score' in pipe.config and hasattr(pipe, '_internal_dict'):
+    if (pipe is not None) and (shared.sd_model_type == 'sdxl') and hasattr(pipe, 'config') and ('requires_aesthetics_score' in pipe.config) and hasattr(pipe, '_internal_dict'):
         debug_process(f'Pipeline clean: {pipe.__class__.__name__}')
         # diffusers adds requires_aesthetics_score with img2img and complains if requires_aesthetics_score exist in txt2img
         internal_dict = dict(pipe._internal_dict) # pylint: disable=protected-access
@@ -1254,8 +1359,10 @@ def clean_diffuser_pipe(pipe):
 
 
 def copy_diffuser_options(new_pipe, orig_pipe):
+    # every pipeline has these attributes
     new_pipe.sd_checkpoint_info = getattr(orig_pipe, 'sd_checkpoint_info', None)
     new_pipe.sd_model_checkpoint = getattr(orig_pipe, 'sd_model_checkpoint', None)
+    # optional
     new_pipe.embedding_db = getattr(orig_pipe, 'embedding_db', None)
     new_pipe.loaded_loras = getattr(orig_pipe, 'loaded_loras', {})
     new_pipe.sd_model_hash = getattr(orig_pipe, 'sd_model_hash', None)
@@ -1266,7 +1373,12 @@ def copy_diffuser_options(new_pipe, orig_pipe):
     new_pipe.feature_extractor = getattr(orig_pipe, 'feature_extractor', None)
     new_pipe.mask_processor = getattr(orig_pipe, 'mask_processor', None)
     new_pipe.restore_pipeline = getattr(orig_pipe, 'restore_pipeline', None)
-    new_pipe.is_sdxl = getattr(orig_pipe, 'is_sdxl', False) # a1111 compatibility item
+    new_pipe.max_condition_images = getattr(orig_pipe, 'max_condition_images', None)
+    new_pipe.single_prompt = getattr(orig_pipe, 'single_prompt', None)
+    new_pipe.patch_size = getattr(orig_pipe, 'patch_size', None)
+    new_pipe.custom_unpack_latents = getattr(orig_pipe, 'custom_unpack_latents', None)
+    # a1111 compatibility item
+    new_pipe.is_sdxl = getattr(orig_pipe, 'is_sdxl', False)
     new_pipe.is_sd2 = getattr(orig_pipe, 'is_sd2', False)
     new_pipe.is_sd1 = getattr(orig_pipe, 'is_sd1', True)
     add_noise_pred_to_diffusers_callback(new_pipe)
@@ -1294,6 +1406,9 @@ def backup_pipe_components(pipe):
         'mask_processor': getattr(pipe, "mask_processor", None),
         'restore_pipeline': getattr(pipe, "restore_pipeline", None),
         'task_args': getattr(pipe, "task_args", None),
+        'patch_size': getattr(pipe, "patch_size", None),
+        'max_condition_images': getattr(pipe, "max_condition_images", None),
+        'single_prompt': getattr(pipe, "single_prompt", None),
         'hijack_prompt': hasattr(pipe, "orig_encode_prompt"),
         'hijack_vae': hasattr(pipe, "vae") and hasattr(pipe.vae, "orig_decode")
     }
@@ -1321,6 +1436,12 @@ def restore_pipe_components(pipe, components):
         pipe.restore_pipeline = components['restore_pipeline']
     if components['task_args'] is not None:
         pipe.task_args = components['task_args']
+    if components['patch_size'] is not None:
+        pipe.patch_size = components['patch_size']
+    if components['max_condition_images'] is not None:
+        pipe.max_condition_images = components['max_condition_images']
+    if components['single_prompt'] is not None:
+        pipe.single_prompt = components['single_prompt']
     if components['hijack_prompt']:
         sd_hijack_te.init_hijack(pipe)
     if components['hijack_vae']:
@@ -1340,6 +1461,8 @@ def set_diffuser_pipe(pipe, new_pipe_type):
         del pipe.no_task_switch
         return pipe
     if get_diffusers_task(pipe) == new_pipe_type:
+        return pipe
+    if pipe_serves_task(pipe, new_pipe_type): # a class registered for several tasks classifies as one of them
         return pipe
 
     if get_diffusers_task(pipe) == DiffusersTaskType.MODULAR:
@@ -1552,7 +1675,6 @@ def reload_model_weights(sd_model=None, info: CheckpointInfo | None = None, op='
         unload_model_weights(op=op)
         sd_model = None
     timer.load = timer.Timer()
-    # TODO model load: implement model in-memory caching
     timer.load.record("config")
     if sd_model is None or force:
         sd_model = None
@@ -1569,9 +1691,10 @@ def reload_model_weights(sd_model=None, info: CheckpointInfo | None = None, op='
 
 
 def clear_caches(full: bool = False):
-    from modules import prompt_parser_diffusers, memstats, sd_offload
+    from modules import prompt_parser_diffusers, memstats, sd_offload_state
     from modules.lora import lora_common, lora_load
     prompt_parser_diffusers.cache.clear()
+    sd_hijack_te.prompt_cache.cache.clear()
     memstats.reset_stats()
     lora_common.loaded_networks.clear()
     lora_common.previously_loaded_networks.clear()
@@ -1579,7 +1702,7 @@ def clear_caches(full: bool = False):
     fn = f'{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
     log.debug(f'Cache clear: full={full} fn={fn}')
     if full:
-        sd_offload.offload_hook_instance = None
+        sd_offload_state.offload_hook_instance = None
 
 
 def unload_model_weights(op='model'):
@@ -1591,6 +1714,7 @@ def unload_model_weights(op='model'):
         shared.compiled_model_state.compiled_cache.clear()
         shared.compiled_model_state.req_cache.clear()
         shared.compiled_model_state.partitioned_modules.clear()
+        # shared.compiled_model_state = None
     if (op == 'model' or op == 'dict') and model_data.sd_model:
         log.debug(f'Current {op}: {memory_stats()}')
         if not ('Model' in shared.opts.cuda_compile and (shared.opts.cuda_compile_backend == "openvino_fx" or shared.opts.cuda_compile_backend == "openvino")):

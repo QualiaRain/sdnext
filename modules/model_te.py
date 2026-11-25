@@ -3,7 +3,7 @@ import json
 import torch
 import transformers
 from safetensors.torch import load_file
-from modules import shared, devices, files_cache, errors, model_quant
+from modules import shared, devices, files_cache, errors, model_quant, sd_hijack_te
 from modules.logger import log
 
 
@@ -16,7 +16,9 @@ def load_t5(name=None, cache_dir=None):
     global loaded_te # pylint: disable=global-statement
     if name is None:
         return None
+    sd_hijack_te.prompt_cache.cache.clear()
     cache_dir = cache_dir or shared.opts.hfcache_dir
+    offline_args = {'local_files_only': True} if shared.opts.offline_mode else {}
     from modules import modelloader
     modelloader.hf_login()
     repo_id = 'stabilityai/stable-diffusion-3-medium-diffusers'
@@ -60,25 +62,25 @@ def load_t5(name=None, cache_dir=None):
         t5 = transformers.T5EncoderModel.from_pretrained(None, state_dict=state_dict, config=t5_config, cache_dir=cache_dir, torch_dtype=devices.dtype)
 
     elif 'fp16' in name.lower():
-        t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', cache_dir=cache_dir, torch_dtype=devices.dtype)
+        t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', cache_dir=cache_dir, torch_dtype=devices.dtype, **offline_args)
 
     elif 'int8' in name.lower():
         from modules.model_quant import create_sdnq_config
         quantization_config = create_sdnq_config(kwargs=None, allow=True, module='any', weights_dtype='int8')
         if quantization_config is not None:
-            t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', quantization_config=quantization_config, cache_dir=cache_dir, torch_dtype=devices.dtype)
+            t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', quantization_config=quantization_config, cache_dir=cache_dir, torch_dtype=devices.dtype, **offline_args)
 
     elif 'uint4' in name.lower():
         from modules.model_quant import create_sdnq_config
         quantization_config = create_sdnq_config(kwargs=None, allow=True, module='any', weights_dtype='uint4')
         if quantization_config is not None:
-            t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', quantization_config=quantization_config, cache_dir=cache_dir, torch_dtype=devices.dtype)
+            t5 = transformers.T5EncoderModel.from_pretrained(repo_id, subfolder='text_encoder_3', quantization_config=quantization_config, cache_dir=cache_dir, torch_dtype=devices.dtype, **offline_args)
 
     elif '/' in name:
         log.debug(f'Load model: type=T5 repo={name}')
         quant_config = model_quant.create_config(module='TE')
         if quant_config is not None:
-            t5 = transformers.T5EncoderModel.from_pretrained(name, cache_dir=cache_dir, torch_dtype=devices.dtype, **quant_config)
+            t5 = transformers.T5EncoderModel.from_pretrained(name, cache_dir=cache_dir, torch_dtype=devices.dtype, **quant_config, **offline_args)
 
     else:
         t5 = None
@@ -143,6 +145,7 @@ def load_vit_g():
 def set_clip(pipe):
     if loaded_te == shared.opts.sd_text_encoder:
         return
+    sd_hijack_te.prompt_cache.cache.clear()
     from modules.sd_models import move_model
     if 'vit-l' in shared.opts.sd_text_encoder.lower() and hasattr(shared.sd_model, 'text_encoder') and shared.sd_model.text_encoder.__class__.__name__ == 'CLIPTextModel':
         try:

@@ -10,7 +10,11 @@ def create_ui():
     modules.scripts_manager.scripts_current = modules.scripts_manager.scripts_txt2img
     modules.scripts_manager.scripts_txt2img.initialize_scripts(is_img2img=False, is_control=False)
     with gr.Blocks(analytics_enabled=False) as _txt2img_interface:
-        txt2img_prompt, txt2img_prompt_styles, txt2img_negative_prompt, txt2img_submit, txt2img_reprocess, txt2img_paste, txt2img_extra_networks_button, txt2img_token_counter, txt2img_token_button, txt2img_negative_token_counter, txt2img_negative_token_button = ui_sections.create_toprow(is_img2img=False, id_part="txt2img")
+        txt2img_prompt, txt2img_prompt_styles, txt2img_negative_prompt, txt2img_submit, txt2img_reprocess, txt2img_paste, txt2img_extra_networks_button, txt2img_token_counter, txt2img_token_button, txt2img_negative_token_counter, txt2img_negative_token_button, _txt2img_schedule  = ui_sections.create_toprow(
+            is_img2img=False,
+            id_part="txt2img",
+            schedule_visible=False,
+        )
 
         txt2img_prompt_img = gr.File(label="", elem_id="txt2img_prompt_image", file_count="single", type="binary", visible=False)
         txt2img_prompt_img.change(fn=images.image_data, inputs=[txt2img_prompt_img], outputs=[txt2img_prompt, txt2img_prompt_img])
@@ -32,8 +36,8 @@ def create_ui():
                 with gr.Group(elem_classes="settings-accordion"):
                     with gr.Accordion(open=False, label="Samplers", elem_classes=["small-accordion"], elem_id="txt2img_sampler_group"):
                         ui_sections.create_sampler_options('txt2img')
-                    seed, reuse_seed, subseed, reuse_subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w = ui_sections.create_seed_inputs('txt2img')
-                    guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop, cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end = ui_guidance.create_guidance_inputs('txt2img')
+                    seed, reuse_seed = ui_sections.create_seed_inputs('txt2img')
+                    cfg_name, cfg_scale, cfg_image, cfg_rescale, cfg_start, cfg_stop, cfg_true, cfg_adaptive = ui_guidance.create_guidance_inputs('txt2img')
                     vae_type, tiling, hidiffusion, clip_skip = ui_sections.create_advanced_inputs('txt2img')
                     grading_brightness, grading_contrast, grading_saturation, grading_hue, grading_gamma, grading_sharpness, grading_color_temp, grading_shadows, grading_midtones, grading_highlights, grading_clahe_clip, grading_clahe_grid, grading_shadows_tint, grading_highlights_tint, grading_split_tone_balance, grading_vignette, grading_grain, grading_lut_file, grading_lut_strength = ui_sections.create_color_inputs('txt2img')
                     hdr_mode, hdr_brightness, hdr_color, hdr_sharpen, hdr_clamp, hdr_boundary, hdr_threshold, hdr_maximize, hdr_max_center, hdr_max_boundary, hdr_color_picker, hdr_tint_ratio, hdr_apply_hires = ui_sections.create_latent_inputs('txt2img')
@@ -46,8 +50,7 @@ def create_ui():
                     txt2img_script_inputs = modules.scripts_manager.scripts_txt2img.setup_ui(parent='txt2img', accordion=True)
 
             txt2img_gallery, txt2img_generation_info, txt2img_html_info, _txt2img_html_info_formatted, txt2img_html_log = ui_common.create_output_panel("txt2img", preview=True, prompt=txt2img_prompt)
-            ui_common.reuse_seed(seed, reuse_seed, subseed=False)
-            ui_common.reuse_seed(subseed, reuse_subseed, subseed=True)
+            ui_common.reuse_seed(seed, reuse_seed)
 
             dummy_component = gr.Textbox(visible=False, value='dummy')
 
@@ -58,10 +61,9 @@ def create_ui():
                 vae_type, tiling, hidiffusion,
                 detailer_enabled, detailer_prompt, detailer_negative, detailer_steps, detailer_strength, detailer_resolution, detailer_classes,
                 batch_count, batch_size,
-                guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop,
-                cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end,
+                cfg_name, cfg_scale, cfg_image, cfg_rescale, cfg_start, cfg_stop, cfg_true, cfg_adaptive,
                 clip_skip,
-                seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w,
+                seed,
                 height, width,
                 enable_hr, hr_denoising_strength,
                 hr_scale, hr_resize_mode, hr_resize_context, hr_upscaler, hr_force, hr_second_pass_steps, hr_resize_x, hr_resize_y,
@@ -112,21 +114,8 @@ def create_ui():
                 (batch_size, "Batch-2"),
                 # seed
                 (seed, "Seed"),
-                (subseed, "Variation seed"),
-                (subseed_strength, "Variation strength"),
-                # guidance
-                (guidance_name, "Guidance"),
-                (guidance_scale, "Guidance scale"),
-                (guidance_rescale, "Guidance rescale"),
-                (guidance_start, "Guidance start"),
-                (guidance_stop, "Guidance stop"),
                 # advanced
-                (cfg_scale, "CFG scale"),
-                (cfg_end, "CFG end"),
                 (clip_skip, "CLiP-skip"),
-                (cfg_image, "Image CFG scale"),
-                (cfg_image, "Hires CFG scale"),
-                (cfg_rescale, "CFG rescale"),
                 (vae_type, "VAE type"),
                 (tiling, "Tiling"),
                 (hidiffusion, "HiDiffusion"),
@@ -154,14 +143,20 @@ def create_ui():
                 # refiner
                 (refiner_start, "Refiner start"),
                 (refiner_steps, "Refiner steps"),
-                (refiner_prompt, "refiner prompt"),
+                (refiner_prompt, "Refiner prompt"),
                 (refiner_negative, "Refiner negative"),
-                # pag
+                # guidance
+                (cfg_name, "CFG name"),
+                (cfg_scale, "CFG scale"),
+                (cfg_image, "CFG image"),
+                (cfg_image, "Image CFG scale"),
+                (cfg_image, "Hires CFG scale"),
+                (cfg_rescale, "CFG rescale"),
+                (cfg_start, "CFG start"),
+                (cfg_stop, "CFG stop"),
                 (cfg_true, "CFG true"),
                 (cfg_adaptive, "CFG adaptive"),
                 # hidden
-                (seed_resize_from_w, "Seed resize from-1"),
-                (seed_resize_from_h, "Seed resize from-2"),
                 *modules.scripts_manager.scripts_txt2img.infotext_fields
             ]
             generation_parameters_copypaste.add_paste_fields("txt2img", None, txt2img_paste_fields, override_settings)

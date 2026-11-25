@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 import torch
-from modules import shared, errors, timer, prompt_parser_diffusers
+from modules import shared, errors, timer, prompt_parser_diffusers, processing_helpers, sd_models
 from modules.logger import log
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ def fix_prompt_batch(p, prompts, negative_prompts, prompts_2, negative_prompts_2
     if type(negative_prompts) is str:
         negative_prompts = [negative_prompts]
 
-    if hasattr(p, 'init_images') and (p.init_images is not None) and (len(p.init_images) > 1) and not getattr(p, 'skip_processing', False):
+    if hasattr(p, 'init_images') and (p.init_images is not None) and (len(p.init_images) > 1) and not getattr(p, 'skip_processing', False) and not sd_models.takes_condition_set():
         while len(prompts) < len(p.init_images):
             prompts.append(prompts[-1] if prompts else '')
         while len(negative_prompts) < len(p.init_images):
@@ -68,11 +68,13 @@ def set_fallback_prompt(args: dict, possible: list[str], prompts, negative_promp
         debug_log(f'Prompt fallback: negative_prompt={negative_prompts}')
         args['negative_prompt'] = negative_prompts
     if ('prompt_2' in possible) and ('prompt_2' not in args) and (prompts_2 is not None) and len(prompts_2) > 0:
-        debug_log(f'Prompt fallback: prompt_2={prompts_2}')
-        args['prompt_2'] = prompts_2
+        if (prompts_2 != prompts) and (prompts_2 != args.get('prompt', None)):
+            debug_log(f'Prompt fallback: prompt_2={prompts_2}')
+            args['prompt_2'] = prompts_2
     if ('negative_prompt_2' in possible) and ('negative_prompt_2' not in args) and (negative_prompts_2 is not None) and len(negative_prompts_2) > 0:
-        debug_log(f'Prompt fallback: negative_prompt_2={negative_prompts_2}')
-        args['negative_prompt_2'] = negative_prompts_2
+        if (negative_prompts_2 != negative_prompts) and (negative_prompts_2 != args.get('negative_prompt', None)):
+            debug_log(f'Prompt fallback: negative_prompt_2={negative_prompts_2}')
+            args['negative_prompt_2'] = negative_prompts_2
     return args
 
 
@@ -92,7 +94,7 @@ def set_prompt(p: StableDiffusionProcessing,
     if (prompt_attention != 'fixed') and ('Onnx' not in cls) and ('prompt' not in p.task_args) and (
         ('StableDiffusion' in cls) or
         ('StableCascade' in cls) or
-        ('Flux' in cls and 'Flux2' not in cls)
+        ('Flux' in cls and 'Flux2' not in cls and 'Flux3' not in cls)
         # or ('Chroma' in cls)
         # or ('HiDreamImagePipeline' in cls)
     ):
@@ -117,7 +119,12 @@ def set_prompt(p: StableDiffusionProcessing,
         prompt_attention = 'fixed'
 
     if not hasattr(shared.sd_model, 'orig_encode_prompt'):
-        log.debug(f'Encode: prompt="{prompts}" negative="{negative_prompts}" embedder={prompt_parser_diffusers.embedder is not None} attention={prompt_attention}')
+        if isinstance(prompts, list):
+            length = sum(len(p) for p in prompts if isinstance(p, str))
+            log.debug(f'Encode: length={length} prompt={prompts} negative={negative_prompts} embedder={prompt_parser_diffusers.embedder is not None} attention={prompt_attention}')
+        else:
+            length = len(prompts) if isinstance(prompts, str) else 0
+            log.debug(f'Encode: length={length} prompt="{prompts}" negative="{negative_prompts}" embedder={prompt_parser_diffusers.embedder is not None} attention={prompt_attention}')
 
     prompts, negative_prompts, prompts_2, negative_prompts_2 = fix_prompt_batch(p, prompts, negative_prompts, prompts_2, negative_prompts_2)
     prompts, negative_prompts, prompts_2, negative_prompts_2 = fix_prompt_model(cls, prompts, negative_prompts, prompts_2, negative_prompts_2)
@@ -188,6 +195,9 @@ def set_prompt(p: StableDiffusionProcessing,
         debug_log('Prompt fallback: no embedder')
         args = set_fallback_prompt(args, possible, prompts=prompts, negative_prompts=negative_prompts, prompts_2=None, negative_prompts_2=None)
         prompt_attention = 'fixed'
+
+    if processing_helpers.is_modular():
+        return prompt_attention, args
 
     if 'prompt_embeds' not in args and 'negative_prompt_embeds' not in args: # pass secondary prompts as-in
         args = set_fallback_prompt(args, possible, prompts=None, negative_prompts=None, prompts_2=prompts_2, negative_prompts_2=negative_prompts_2)

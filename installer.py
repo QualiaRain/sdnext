@@ -1,5 +1,6 @@
 from functools import lru_cache
 import os
+import re
 import sys
 import json
 import time
@@ -25,18 +26,30 @@ class Torch(dict):
         for k, v in kwargs.items():
             self[k] = v
 
+
+# target commit hashes for specific packages
+diffusers_target = '06a9cfb86ae8aa69c6a220ba0da0f37b819dde6a' # diffusers commit hash == 0.42.0.dev == 10-27-2026
+transformers_target = 'c0d024fbc873ab0325e1b40fc1bd69069609de65' # transformers commit hash == 5.21.0.dev == 10-27-2026
+sdnq_target = '8bf23dffa1da84cbf1989bdec4a4fc2adc3e2e5f' # sdnq commit hash == 0.2.9.dev == 10-27-2026
+
+git_commit = "unknown"
+diffusers_commit = "unknown"
+transformers_commit = "unknown"
+sdnq_commit = "unknown"
 version = {
     'app': 'sd.next',
     'updated': 'unknown',
-    'commit': 'unknown',
     'branch': 'unknown',
+    'commit': 'unknown',
     'url': 'unknown',
+    'ui': 'unknown',
     'kanvas': 'unknown',
+    'sdnq': 'unknown'
 }
 log = logging.getLogger('sdnext.installer')
 debug = log.debug if os.environ.get('SD_INSTALL_DEBUG', None) is not None else lambda *args, **kwargs: None
 setuptools, distutils = None, None # defined via ensure_base_requirements
-current_branch = None
+
 pip_log = '--log pip.log' if os.environ.get('SD_PIP_DEBUG', None) is not None else ''
 log_file = os.path.join(os.path.dirname(__file__), 'sdnext.log')
 hostname = socket.gethostname()
@@ -57,6 +70,7 @@ args = Dot({
     'use_ipex': False,
     'use_cuda': False,
     'use_rocm': False,
+    'use_openvino': False,
     'experimental': False,
     'test': False,
     'tls_selfsign': False,
@@ -65,10 +79,6 @@ args = Dot({
     'ignore': False,
     'uv': False,
 })
-git_commit = "unknown"
-sdnq_commit = "unknown"
-diffusers_commit = "unknown"
-transformers_commit = "unknown"
 restart_required = False
 extensions_commit = { # force specific commit for extensions
     'sd-webui-controlnet': 'ecd33eb',
@@ -95,8 +105,9 @@ except Exception:
 
 @lru_cache
 def get_logfile():
+    from modules.logger import get_console_theme_file
     log_size = os.path.getsize(log_file) if os.path.exists(log_file) else 0
-    log.info(f'Logger: file="{os.path.abspath(log_file)}" level={logging.getLevelName(logging.DEBUG if args.debug else logging.INFO)} host="{hostname}" size={log_size} mode={"append" if not log_rolled else "create"}')
+    log.info(f'Logger: file="{os.path.abspath(log_file)}" theme="{get_console_theme_file()}" level={logging.getLevelName(logging.DEBUG if args.debug else logging.INFO)} host="{hostname}" size={log_size} mode={"append" if not log_rolled else "create"}')
     return log_file
 
 
@@ -118,6 +129,27 @@ def print_dict(d):
     if d is None:
         return ''
     return ' '.join([f'{k}={v}' for k, v in d.items()])
+
+
+secret_args = ['auth', 'api_auth'] # cli options whose values never reach the log or the api
+
+
+def mask_args(argv: list, parsed) -> list:
+    values = [v for v in (getattr(parsed, name, None) for name in secret_args) if v]
+    masked = []
+    for arg in argv:
+        flag, _sep, value = arg.partition('=')
+        if arg in values:
+            masked.append('***')
+        elif value in values:
+            masked.append(f'{flag}=***')
+        else:
+            masked.append(arg)
+    return masked
+
+
+def mask_dict(d: dict) -> dict:
+    return {k: '***' if (k in secret_args and v) else v for k, v in d.items()}
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -236,8 +268,8 @@ def uv_info():
         uv_version = subprocess.check_output([uv_global, "--version"], text=True).strip()
         uv_cache_dir = subprocess.check_output([uv_global, "cache", "dir"], text=True).strip()
     uv_cache_disabled = os.environ.get("UV_NO_CACHE") == "1"
-    site = next(p for p in sys.path if p.endswith("site-packages"))
-    if uv_cache_dir and not uv_cache_disabled:
+    site = next((p for p in sys.path if p.endswith(("site-packages", "dist-packages"))), None)
+    if uv_cache_dir and not uv_cache_disabled and site:
         for root, _dirs, files in os.walk(site):
             for f in files:
                 full = os.path.join(root, f)
@@ -383,12 +415,11 @@ def git(arg: str, folder: str | None= None, ignore: bool = False, optional: bool
 
 # reattach as needed as head can get detached
 def branch(folder=None):
-    # if args.experimental:
-    #    return None
     t_start = time.time()
     if not os.path.exists(os.path.join(folder or os.curdir, '.git')):
         return None
     branches = []
+    detached = False
     try:
         b = git('branch --show-current', folder, optional=True)
         if b == '':
@@ -397,27 +428,38 @@ def branch(folder=None):
         if len(branches) > 0 and len(marked) > 0:
             b = marked[0]
             if ('detached' in b or 'HEAD' in b) and len(branches) > 1:
+                detached = True
                 b = branches[1].strip()
-                log.debug(f'Git detached head detected: folder="{folder}" reattach={b}')
+                log.debug(f'Submodule: folder="{folder}" reattach={b} git detached head detected')
     except Exception:
         b = git('git rev-parse --abbrev-ref HEAD', folder, optional=True)
+
+    if args.experimental or args.skip_git or args.skip_all:
+        return b
+
     if 'main' in b:
-        b = 'main'
+        tgt = 'main'
     elif 'master' in b:
-        b = 'master'
+        tgt = 'master'
     else:
-        b = b.split('\n')[0].replace('*', '').strip()
-    log.debug(f'Git submodule: {folder} / {b}')
-    git(f'checkout {b}', folder, ignore=True, optional=True)
+        tgt = b.split('\n')[0].replace('*', '').strip()
+    if (tgt != b) or detached:
+        log.debug(f'Submodule: folder="{folder}" branch="{b}" target="{tgt}"')
+        git(f'checkout {tgt}', folder, ignore=True, optional=True)
+        git('fetch', folder, ignore=True)
+        git(f'merge --ff-only origin/{tgt}', folder, ignore=True)
+    else:
+        log.debug(f'Submodule: folder="{folder}" branch="{b}"')
     ts('branch', t_start)
-    return b
+    return tgt
 
 
 # restart process
 def restart(argv: list | None = None):
     argv = argv if isinstance(argv, list) else sys.argv
     log.critical('Restarting process...')
-    os.execv(sys.executable, ['python'] + argv)
+    executable = 'python' if sys.platform == 'win32' else sys.executable # posix python locates its venv from argv[0]; windows execv does not quote a path with spaces
+    os.execv(sys.executable, [executable] + argv)
 
 
 # update git repository
@@ -552,33 +594,28 @@ def check_python(supported_minors=None, experimental_minors=None, reason=None):
 
 
 # register sdnq package from github submodule
-def register_sdnq(skip=False, devices=None, shared=None):
-    if not skip:
-        t_start = time.time()
-        fn = os.path.join('extensions-builtin', 'sdnq', 'src', 'sdnq', '__init__.py')
-        name = "sdnq"
-        spec = importlib.util.spec_from_file_location(name, fn)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module) # this is where actual import happens
-        import sdnq # pylint: disable=unused-import # test import
-        ts('sdnq', t_start)
-    if devices is not None:
-        import sdnq
-        sdnq.sdnext.devices = devices
-        sdnq.quantizer.devices = devices
-        sdnq.dequantizer.devices = devices
-        sdnq.quant_utils.devices = devices
-        sdnq.kernel_wrappers.devices = devices
-    if shared is not None:
-        import sdnq
-        sdnq.sdnext.shared = shared
-        sdnq.quantizer.shared = shared
-        sdnq.dequantizer.shared = shared
-        sdnq.quant_utils.shared = shared
-        sdnq.kernel_wrappers.shared = shared
-        sdnq.common.shared = shared
-        sdnq.loader.shared = shared
+def register_sdnq():
+    t_start = time.time()
+    global sdnq_commit # pylint: disable=global-statement
+    sdnq_ver = version.get('sdnq', 'unknown')
+    sdnq_commit = sdnq_ver.split('@')[1] if '@' in sdnq_ver else 'unknown'
+    core_branch = version.get('branch', 'unknown')
+    locked = core_branch in ['master', 'main']
+    if locked and (sdnq_commit not in sdnq_target):
+        git('checkout ' + sdnq_target, folder='extensions-builtin/sdnq', ignore=True, optional=True)
+        sdnq_commit = run('git', 'rev-parse HEAD', check=True, cwd='extensions-builtin/sdnq')[0].stdout.strip()[:8]
+    os.environ.setdefault('SDNQ_LOGGER_NAME', 'sd')
+    if not args.use_openvino:
+        os.environ.setdefault('SDNQ_USE_OPENVINO_MM', '0')
+    fn = os.path.join('extensions-builtin', 'sdnq', 'src', 'sdnq', '__init__.py')
+    name = "sdnq"
+    spec = importlib.util.spec_from_file_location(name, fn)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module) # this is where actual import happens
+    import sdnq # pylint: disable=unused-import # test import
+    log.debug(f'Initializing: sdnq version={sdnq.__version__} commit={sdnq_commit} locked={locked}')
+    ts('sdnq', t_start)
 
 
 # check diffusers version
@@ -586,50 +623,46 @@ def check_diffusers():
     t_start = time.time()
     if args.skip_all:
         return
-    target_commit = "d5baa4fb548294f47dbca49890abd4b291204c60" # diffusers commit hash == 0.40.0.dev0 == 08-15-2026
     # if args.use_rocm or args.use_zluda:
     #     sha = '043ab2520f6a19fce78e6e060a68dbc947edb9f9' # lock diffusers versions for now
     pkg = package_spec('diffusers')
     parts = pkg.version.split('.') if pkg is not None else []
     minor = int(parts[1]) if len(parts) > 1 else -1
-    current = package_commit(pkg) if minor > -1 else ''
-    if (minor == -1) or ((current != target_commit) and (not args.experimental)):
+    global diffusers_commit # pylint: disable=global-statement
+    diffusers_commit = package_commit(pkg) if minor > -1 else ''
+    if (minor == -1) or ((diffusers_commit != diffusers_target) and (not args.experimental)):
         if minor == -1:
-            log.info(f'Install: package="diffusers" commit={target_commit}')
+            log.info(f'Install: package="diffusers" commit={diffusers_target}')
         else:
-            log.info(f'Update: package="diffusers" current={pkg.version} commit={current} target={target_commit}')
+            log.info(f'Update: package="diffusers" current={pkg.version} commit={diffusers_commit} target={diffusers_target}')
             pip('uninstall --yes diffusers', ignore=True, quiet=True, uv=False)
         if args.skip_git:
             log.warning('Git: marked as not available but required for diffusers installation')
-        pip(f'install git+https://github.com/huggingface/diffusers@{target_commit}', ignore=False, quiet=True, uv=False)
-        global diffusers_commit # pylint: disable=global-statement
-        diffusers_commit = target_commit
+        pip(f'install git+https://github.com/huggingface/diffusers@{diffusers_target}', ignore=False, quiet=True, uv=False)
+        diffusers_commit = diffusers_target
     ts('diffusers', t_start)
 
 
 # check transformers version
 def check_transformers():
+    global transformers_commit # pylint: disable=global-statement
     t_start = time.time()
     if args.skip_all or args.skip_git or args.experimental:
         return
     pkg_transformers = package_spec('transformers')
     pkg_tokenizers = package_spec('tokenizers')
-    # target_commit = '753d61104116eefc8ffc977327b441ee0c8d599f' # transformers commit hash == 4.57.6
-    # target_commit = "cf8572d34e39818e42dbf220701fbd3eb5b5a82a" # transformers commit hash == 5.14.0.dev0 == 08-04-2026
-    target_commit = "b70d02fc724d04c916832ca4ead03ff05e8fb1ee" # transformers commit hash == 5.13.0.dev0 == 07-03-2026
-    target_tokenizers = '0.22.2'
+    target_tokenizers = '0.23.3'
     # Git commit-pinned version
-    current = package_commit(pkg_transformers)
-    if args.reinstall or (pkg_transformers is None) or (pkg_transformers.version.startswith('4')) or (current != target_commit):
+    transformers_commit = package_commit(pkg_transformers)
+    if args.reinstall or (pkg_transformers is None) or (pkg_transformers.version.startswith('4')) or (transformers_commit != transformers_target):
         if pkg_transformers is None:
-            log.info(f'Install: package="transformers" commit={target_commit}')
+            log.info(f'Install: package="transformers" commit={transformers_target}')
         else:
-            log.info(f'Update: package="transformers" current={pkg_transformers.version} commit={current} target={target_commit}')
+            log.info(f'Update: package="transformers" current={pkg_transformers.version} commit={transformers_commit} target={transformers_target}')
         pip('uninstall --yes transformers', ignore=True, quiet=True)
         pip(f'install tokenizers=={target_tokenizers}', ignore=False, quiet=True)
-        pip(f'install git+https://github.com/huggingface/transformers@{target_commit}', ignore=False, quiet=True)
-        global transformers_commit # pylint: disable=global-statement
-        transformers_commit = target_commit
+        pip(f'install git+https://github.com/huggingface/transformers@{transformers_target}', ignore=False, quiet=True)
+        transformers_commit = transformers_target
     if args.reinstall or (pkg_tokenizers is None) or (pkg_tokenizers.version != target_tokenizers):
         pip(f'install tokenizers=={target_tokenizers}', ignore=False, quiet=True)
     ts('transformers', t_start)
@@ -653,6 +686,26 @@ def check_onnx():
     ts('onnx', t_start)
 
 
+# check numpy version
+def check_numpy():
+    t_start = time.time()
+    if args.skip_all or args.skip_requirements:
+        return
+    torch_ver = package_version('torch') or ''
+    ver_match = re.match(r'^(\d+)\.(\d+)', torch_ver)
+    if ver_match:
+        torch_major, torch_minor = map(int, ver_match.groups())
+    else:
+        torch_major, torch_minor = 0, 0
+    if (torch_major, torch_minor) < (2, 11):
+        install('numpy==2.1.2', 'numpy', ignore=True)
+        install('scipy==1.14.1', 'scipy', ignore=True)
+    else:
+        install('numpy==2.4.6', 'numpy', ignore=True)
+        install('scipy', 'scipy', ignore=True) # cannot version-lock scipy as different versions are available for different python versions
+    ts('numpy', t_start)
+
+
 def install_cuda():
     t_start = time.time()
     log.info('CUDA: nVidia toolkit detected')
@@ -660,25 +713,21 @@ def install_cuda():
     if args.use_nightly:
         cmd = os.environ.get('TORCH_COMMAND', '--upgrade --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu132 --extra-index-url https://download.pytorch.org/whl/nightly/cu130')
     else:
-        cmd = os.environ.get('TORCH_COMMAND', 'torch==2.13.0+cu132 torchvision==0.28.0+cu132 --index-url https://download.pytorch.org/whl/cu132')
+        cmd = os.environ.get('TORCH_COMMAND', 'torch==2.14.1+cu132 torchvision==0.29.1+cu132 --index-url https://download.pytorch.org/whl/cu132')
     return cmd
 
 
-def install_rocm_zluda():
+def install_rocm():
     torch_command = ''
     t_start = time.time()
     if args.skip_all or args.skip_requirements:
         return torch_command
     from modules import rocm
-
     amd_gpus = []
     try:
         amd_gpus = rocm.get_agents()
     except Exception as e:
         log.warning(f'ROCm agent enumerator failed: {e}')
-
-    #os.environ.setdefault('TENSORFLOW_PACKAGE', 'tensorflow')
-
     device = None
     if len(amd_gpus) == 0:
         log.warning('ROCm: no agent was found')
@@ -699,20 +748,20 @@ def install_rocm_zluda():
             if device_id < len(amd_gpus):
                 device = amd_gpus[device_id]
 
+    rocm_sdk_version = '10.1.0' if device is not None and device.gfx_version >= 0x1100 else '10.0.0'
     if sys.platform == "win32" and (not args.use_zluda) and (device is not None) and (device.therock is not None) and not installed("rocm"):
         check_python(supported_minors=[11, 12, 13], reason='ROCm-Windows: python==3.11/3.12/3.13 required')
-        install("rocm[devel]==7.14.0 --index-url https://repo.amd.com/rocm/whl-multi-arch/")
+        install(f"rocm[devel,libraries]=={rocm_sdk_version} --index-url https://stable.repo.amd.com/rocm/whl-next/")
         rocm.refresh()
 
     msg = f'ROCm: version={rocm.version}'
     if device is not None:
-        msg += f', using agent {device}'
+        msg += f' agent={device} active'
     log.info(msg)
 
     if sys.platform == "win32":
         if args.use_zluda:
             torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.7.1+cu118 torchvision==0.22.1+cu118 --index-url https://download.pytorch.org/whl/cu118')
-
             if args.device_id is not None:
                 if os.environ.get('HIP_VISIBLE_DEVICES', None) is not None:
                     log.warning('Setting HIP_VISIBLE_DEVICES and --device-id at the same time may be mistake.')
@@ -732,39 +781,41 @@ def install_rocm_zluda():
                 zluda_installer.load()
             except Exception as e:
                 log.error(f'Load ZLUDA: {e}')
-        else: # TODO rocm: switch to pytorch source when it becomes available
+        else:
             if device is None:
                 log.error('ROCm: no agent found - make sure that graphics driver is installed and up to date')
             if device is not None and device.therock is not None:
                 check_python(supported_minors=[11, 12, 13], reason='ROCm-Windows: python==3.11/3.12/3.13 required')
                 # Use device-specific index for torch/torchvision, with root index as fallback for torchaudio and other packages
-                torch_command = os.environ.get('TORCH_COMMAND', f'"torch[device-{device.therock}]==2.12.0+rocm7.14.0" "torchvision[device-{device.therock}]==0.27.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"  --index-url https://repo.amd.com/rocm/whl-multi-arch/')
+                if rocm_sdk_version == '10.0.0':
+                    # The unpinned index resolves to ROCm 10.1 wheels, which are incompatible with gfx10 GPUs.
+                    torch_command = os.environ.get('TORCH_COMMAND', f'"torch[device-{device.therock}]==2.13.0+rocm10.0.0" "torchvision[device-{device.therock}]==0.28.0+rocm10.0.0" "torchaudio==2.11.0+rocm10.0.0" --index-url https://stable.repo.amd.com/rocm/whl-next/')
+                else:
+                    torch_command = os.environ.get('TORCH_COMMAND', f'"torch[device-{device.therock}]" "torchvision[device-{device.therock}]==0.29.0a0+rocm10.1.0" torchaudio --index-url https://stable.repo.amd.com/rocm/whl-next/')
             elif isinstance(rocm.environment, rocm.PythonPackageEnvironment):
                 check_python(supported_minors=[11, 12, 13], reason='ROCm-Windows: python==3.11/3.12/3.13 required')
-                torch_command = os.environ.get('TORCH_COMMAND', 'torch torchvision torchaudio --index-url https://rocm.nightlies.amd.com/whl-multi-arch')
+                torch_command = os.environ.get('TORCH_COMMAND', 'torch torchvision torchaudio --index-url https://stable.repo.amd.com/rocm/whl-next/')
             else:
-                check_python(supported_minors=[12], reason='ROCm-Windows: preview python==3.12 required')
+                check_python(supported_minors=[12], reason='ROCm-Windows: python==3.12 required')
                 # torch 2.8.0a0 is the last version with rocm 6.4 support
                 torch_command = os.environ.get('TORCH_COMMAND', '--no-cache-dir https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torch-2.8.0a0%2Bgitfc14c65-cp312-cp312-win_amd64.whl https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchvision-0.24.0a0%2Bc85f008-cp312-cp312-win_amd64.whl')
 
     else: # linux
-        #check_python(supported_minors=[10, 11, 12, 13, 14], reason='ROCm backend requires a Python version between 3.10 and 3.13')
         rocm_major, rocm_minor = (int(x) for x in rocm.version.split('.')) if rocm.version is not None else (0, 0)
         if args.use_nightly:
-            if rocm.version is None or (rocm_major > 7 or (rocm_major == 7 and rocm_minor >= 14)): # assume the latest if version check fails
-                torch_command = os.environ.get('TORCH_COMMAND', '--upgrade --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.14')
-            else: # oldest rocm version on nightly is 7.2
-                torch_command = os.environ.get('TORCH_COMMAND', '--upgrade --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.2')
+            torch_command = os.environ.get('TORCH_COMMAND', '--upgrade --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm10.1')
         else:
-            if rocm.version is None or rocm_major > 7: # assume the latest if version check fails
-                torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.13.0+rocm7.2 torchvision==0.28.0+rocm7.2 --index-url https://download.pytorch.org/whl/rocm7.2')
+            if (rocm.version is None) or (rocm_major > 7): # assume the latest if version check fails
+                torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.14.1+rocm7.14 torchvision==0.29.1+rocm7.14 --index-url https://download.pytorch.org/whl/rocm7.14')
             else:
                 match rocm_major:
                     case 7:
-                        if rocm_minor >= 2: # latest supported rocm 7.x version is 7.2
-                            torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.13.0+rocm7.2 torchvision==0.28.0+rocm7.2 --index-url https://download.pytorch.org/whl/rocm7.2')
+                        if rocm_minor >= 2: # latest supported rocm 7.x
+                            torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.14.1+rocm7.14 torchvision==0.29.1+rocm7.14 --index-url https://download.pytorch.org/whl/rocm7.14')
                         else:
                             match rocm_minor:
+                                case 2:
+                                    torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.14.1+rocm7.2 torchvision==0.29.1+rocm7.2 --index-url https://download.pytorch.org/whl/rocm7.2')
                                 case 1:
                                     torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.13.0+rocm7.1 torchvision==0.28.0+rocm7.1 --index-url https://download.pytorch.org/whl/rocm7.1')
                                 case _:
@@ -786,8 +837,7 @@ def install_rocm_zluda():
                     case _:
                         # lock to 2.4.1 instead of 2.5.1 for performance reasons there are no support for torch 2.6 for rocm 6.0
                         torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.4.1+rocm6.0 torchvision==0.19.1+rocm6.0 --index-url https://download.pytorch.org/whl/rocm6.0')
-                        log.warning(f"ROCm: unsupported version={rocm.version}")
-                        log.warning("ROCm: minimum supported version=6.0")
+                        log.warning(f"ROCm: unsupported version={rocm.version} minimum supported version=6.0")
 
     if device is None or os.environ.get("HSA_OVERRIDE_GFX_VERSION", None) is not None:
         log.info(f'ROCm: HSA_OVERRIDE_GFX_VERSION auto config skipped: device={device} version={os.environ.get("HSA_OVERRIDE_GFX_VERSION", None)}')
@@ -808,7 +858,7 @@ def install_ipex():
     if args.use_nightly:
         torch_command = os.environ.get('TORCH_COMMAND', '--upgrade --pre torch torchvision --extra-index-url https://download.pytorch.org/whl/nightly/xpu')
     else:
-        torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.13.0+xpu torchvision==0.28.0+xpu --extra-index-url https://download.pytorch.org/whl/xpu')
+        torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.14.1+xpu torchvision==0.29.1+xpu --extra-index-url https://download.pytorch.org/whl/xpu')
 
     ts('ipex', t_start)
     return torch_command
@@ -824,7 +874,7 @@ def install_openvino():
         torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.11.0+cpu torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu')
 
     if not (args.skip_all or args.skip_requirements):
-        install(os.environ.get('OPENVINO_COMMAND', 'openvino==2026.2.1'), 'openvino')
+        install(os.environ.get('OPENVINO_COMMAND', 'openvino==2026.4.1'), 'openvino')
     ts('openvino', t_start)
     return torch_command
 
@@ -939,18 +989,20 @@ def check_torch():
             from modules import rocm
             is_rocm_available = allow_rocm and (args.use_rocm or args.use_zluda or rocm.is_installed) # late eval to avoid unnecessary import
 
-        if is_cuda_available and args.use_cuda: # prioritize cuda
+        # first prioritize use-flags
+        if is_cuda_available and args.use_cuda:
             torch_command = install_cuda()
-        elif is_rocm_available and (args.use_rocm or args.use_zluda): # prioritize rocm
-            torch_command = install_rocm_zluda()
-        elif allow_ipex and args.use_ipex: # prioritize ipex
+        elif is_rocm_available and (args.use_rocm or args.use_zluda):
+            torch_command = install_rocm()
+        elif allow_ipex and args.use_ipex:
             torch_command = install_ipex()
-        elif allow_openvino and args.use_openvino: # prioritize openvino
+        elif allow_openvino and args.use_openvino:
             torch_command = install_openvino()
+        # then try auto-detect
         elif is_cuda_available:
             torch_command = install_cuda()
         elif is_rocm_available:
-            torch_command = install_rocm_zluda()
+            torch_command = install_rocm()
         elif is_ipex_available:
             torch_command = install_ipex()
         else:
@@ -1003,6 +1055,15 @@ def check_torch():
                     torch_info.set(type='cpu')
             except Exception as e:
                 log.error(f'Torch: type=cpu {e}')
+        elif '+rocm' in torch.__version__:
+            if not torch.cuda.is_available():
+                log.warning(f'Torch: version="{torch.__version__}" ROCm version installed but GPU acceleration is not available')
+        elif '+cu' in torch.__version__:
+            if not torch.cuda.is_available():
+                log.warning(f'Torch: version="{torch.__version__}" CUDA version installed but GPU acceleration is not available')
+        elif '+xpu' in torch.__version__:
+            if not torch.xpu.is_available():
+                log.warning(f'Torch: version="{torch.__version__}" XPU version installed but GPU acceleration is not available')
 
         if hasattr(torch, "xpu") and torch.xpu.is_available() and allow_ipex:
             try:
@@ -1045,6 +1106,7 @@ def check_torch():
                     log.info(f'Torch detected: {gpu}')
             except Exception as e:
                 log.error(f'Torch: type=cuda/rocm {e}')
+
         if hasattr(torch, "accelerator") and torch.accelerator.is_available():
             try:
                 _index = torch.accelerator.current_device_index()
@@ -1132,7 +1194,7 @@ def list_extensions_folder(folder, quiet=False):
     disabled_extensions = opts.get('disabled_extensions', [])
     enabled_extensions = [x for x in os.listdir(folder) if os.path.isdir(os.path.join(folder, x)) and x not in disabled_extensions and not x.startswith('.')]
     if not quiet:
-        log.info(f'Extensions: path="{folder}" enabled={enabled_extensions}')
+        log.info(f'Extensions: path="{folder}" available={enabled_extensions}')
     return enabled_extensions
 
 
@@ -1289,13 +1351,6 @@ def install_pydantic():
     reload('pydantic', '2.13.4')
 
 
-def install_scipy():
-    if args.new or (sys.version_info >= (3, 14)):
-        install('scipy==1.17.1', ignore=True, quiet=True)
-    else:
-        install('scipy==1.14.1', ignore=True, quiet=True)
-
-
 def install_opencv():
     install('opencv-python==4.13.0.92', ignore=True, quiet=True)
     install('opencv-python-headless==4.13.0.92', ignore=True, quiet=True)
@@ -1324,7 +1379,6 @@ def install_insightface():
 def install_optional():
     t_start = time.time()
     log.info('Installing optional requirements...')
-    install('pillow-heif')
     install('addict')
     install('yapf')
     install('--no-build-isolation git+https://github.com/Disty0/BasicSR@23c1fb6f5c559ef5ce7ad657f2fa56e41b121754', 'basicsr', ignore=True, quiet=True)
@@ -1335,11 +1389,14 @@ def install_optional():
     install('Cython', ignore=True, quiet=True)
     install('gguf', ignore=True, quiet=True)
     install('hf_transfer', ignore=True, quiet=True)
-    install('hf_xet', ignore=True, quiet=True)
     install('nvidia-ml-py', ignore=True, quiet=True)
+    install('pillow-heif')
     install('pillow-jxl-plugin==1.3.7', ignore=True, quiet=True)
     install('ultralytics==8.4.67', ignore=True, quiet=True)
     install('open-clip-torch', no_deps=True, quiet=True)
+    install('runai_model_streamer', ignore=True, quiet=True)
+    install('facexlib', ignore=True, quiet=True)
+    install('omegaconf', ignore=True, quiet=True)
     install('git+https://github.com/tencent-ailab/IP-Adapter.git', 'ip_adapter', ignore=True, quiet=True)
     # install('git+https://github.com/openai/CLIP.git', 'clip', quiet=True, no_build_isolation=True)
     ts('optional', t_start)
@@ -1360,7 +1417,6 @@ def install_requirements():
         log.info('Install requirements: this may take a while...')
         pip('install -r requirements.txt')
     if args.optional:
-        quick_allowed = False
         install_optional()
     log.info('Install: verifying requirements')
     if args.new:
@@ -1371,11 +1427,12 @@ def install_requirements():
             if not installed(line, quiet=True) or args.reinstall:
                 if args.reinstall:
                     log.trace(f'Install: package="{line}" reinstall')
-                _res = install(line, reinstall=args.reinstall)
+                # reinstall only the listed package - dependencies were handled by the bulk pass above and
+                # force-reinstalling them would replace the backend torch build with a cpu one from pypi
+                _res = install(line, reinstall=args.reinstall, no_deps=args.reinstall)
     install_compel()
     install_pydantic()
     install_opencv()
-    install_scipy()
     if args.profile:
         pr.disable()
         print_profile(pr, 'Requirements')
@@ -1384,7 +1441,10 @@ def install_requirements():
 
 # set environment variables controlling the behavior of various libraries
 def set_environment():
+
     log.debug('Setting environment tuning')
+    from modules.logger import console
+    log.debug(f'Console: terminal={console.is_terminal} width={console.width} height={console.height} color={console.color_system} legacy={console.legacy_windows}')
     os.environ.setdefault('ACCELERATE', 'True')
     os.environ.setdefault('ATTN_PRECISION', 'fp16')
     os.environ.setdefault('ClDeviceGlobalMemSizeAvailablePercent', '100')
@@ -1414,7 +1474,6 @@ def set_environment():
     os.environ.setdefault('TOKENIZERS_PARALLELISM', '0')
     os.environ.setdefault('TORCH_CUDNN_V8_API_ENABLED', '1')
     os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
-    os.environ.setdefault('TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL', '1')
     os.environ.setdefault('MIOPEN_FIND_MODE', '2')
     os.environ.setdefault('UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS', '1')
     os.environ.setdefault('USE_TORCH', '1')
@@ -1479,15 +1538,15 @@ def get_version(force=False):
             pass
 
         try:
-            ver = run('git', 'log --pretty=format:"%h %ad" -1 --date=short', check=True)[0].stdout or '  '
+            ver = run('git', 'log --pretty=format:"%h %ad" -1 --date=short', check=True)[0].stdout.strip() or '  '
             commit, updated = ver.split(' ')
             version['commit'], version['updated'] = commit, updated
         except Exception as e:
             log.warning(f'Version: where=commit {e}')
 
         try:
-            origin = run('git', 'remote get-url origin', check=True)[0].stdout
-            branch_name = run('git', 'rev-parse --abbrev-ref HEAD', check=True)[0].stdout
+            origin = run('git', 'remote get-url origin', check=True)[0].stdout.strip()
+            branch_name = run('git', 'rev-parse --abbrev-ref HEAD', check=True)[0].stdout.strip()
             # normalize ssh remotes (git@host:owner/repo) and ssh-protocol remotes
             # (ssh://git@host/owner/repo) to the canonical https form so downstream
             # url parsers don't have to special-case each remote shape
@@ -1506,8 +1565,9 @@ def get_version(force=False):
 
         try:
             if os.path.exists('extensions-builtin/sdnext-modernui'):
-                branch_ui = run('git', 'rev-parse --abbrev-ref HEAD', check=True, cwd='extensions-builtin/sdnext-modernui')[0].stdout
-                version['ui'] = 'dev' if 'dev' in branch_ui else 'main'
+                branch_ui = run('git', 'rev-parse --abbrev-ref HEAD', check=True, cwd='extensions-builtin/sdnext-modernui')[0].stdout.strip()
+                commit_ui = run('git', 'rev-parse HEAD', check=True, cwd='extensions-builtin/sdnext-modernui')[0].stdout.strip()
+                version['ui'] = ('dev' if 'dev' in branch_ui else 'main') + '@' + commit_ui[:8]
             else:
                 version['ui'] = 'unavailable'
         except Exception as e:
@@ -1518,13 +1578,25 @@ def get_version(force=False):
             if os.environ.get('SD_KANVAS_DISABLE', None) is not None:
                 version['kanvas'] = 'disabled'
             elif os.path.exists('extensions-builtin/sdnext-kanvas'):
-                branch_kanvas = run('git', 'rev-parse --abbrev-ref HEAD', check=True, cwd='extensions-builtin/sdnext-kanvas')[0].stdout
-                version['kanvas'] = 'dev' if 'dev' in branch_kanvas else 'main'
+                branch_kanvas = run('git', 'rev-parse --abbrev-ref HEAD', check=True, cwd='extensions-builtin/sdnext-kanvas')[0].stdout.strip()
+                commit_kanvas = run('git', 'rev-parse HEAD', check=True, cwd='extensions-builtin/sdnext-kanvas')[0].stdout.strip()
+                version['kanvas'] = ('dev' if 'dev' in branch_kanvas else 'main') + '@' + commit_kanvas[:8]
             else:
                 version['kanvas'] = 'unavailable'
         except Exception as e:
             log.warning(f'Version: where=kanvas {e}')
             version['kanvas'] = 'unknown'
+
+        try:
+            if os.path.exists('extensions-builtin/sdnq'):
+                branch_sdnq = run('git', 'rev-parse --abbrev-ref HEAD', check=True, cwd='extensions-builtin/sdnq')[0].stdout.strip()
+                commit_sdnq = run('git', 'rev-parse HEAD', check=True, cwd='extensions-builtin/sdnq')[0].stdout.strip()
+                version['sdnq'] = ('dev' if 'dev' in branch_sdnq else 'main') + '@' + commit_sdnq[:8]
+            else:
+                version['sdnq'] = 'unavailable'
+        except Exception as e:
+            log.warning(f'Version: where=sdnq {e}')
+            version['sdnq'] = 'unknown'
 
     ts('version', t_start)
     return version
@@ -1534,13 +1606,14 @@ def check_ui(ver):
     def same(ver):
         core = ver['branch'] if ver is not None and 'branch' in ver else 'unknown'
         ui = ver['ui'] if ver is not None and 'ui' in ver else 'unknown'
+        ui = ui.split('@')[0] if '@' in ui else ui
         return (core == ui) or (core == 'master' and ui == 'main') or (core == 'dev' and ui == 'dev') or (core == 'HEAD')
 
     if 'vladmandic/sdnext' not in ver.get('url', ''):
         return
     t_start = time.time()
     if not same(ver):
-        log.debug(f'Branch mismatch: {ver}')
+        log.debug(f'Branch mismatch: module=ModernUI {ver}')
         try:
             if 'dev' in ver['branch']:
                 target = 'dev'
@@ -1561,13 +1634,14 @@ def check_kanvas(ver):
     def same(ver):
         core = ver['branch'] if ver is not None and 'branch' in ver else 'unknown'
         kanvas = ver['kanvas'] if ver is not None and 'kanvas' in ver else 'unknown'
+        kanvas = kanvas.split('@')[0] if '@' in kanvas else kanvas
         return (core == kanvas) or (core == 'master' and kanvas == 'main') or (core == 'dev' and kanvas == 'dev') or (core == 'HEAD')
 
     if 'vladmandic/sdnext' not in ver.get('url', ''):
         return
     t_start = time.time()
     if not same(ver):
-        log.debug(f'Branch mismatch: {ver}')
+        log.debug(f'Branch mismatch: module=Kanvas {ver}')
         try:
             if 'dev' in ver['branch']:
                 target = 'dev'
@@ -1640,7 +1714,7 @@ def check_version(reset=True): # pylint: disable=unused-argument
     check_kanvas(ver)
     commit = git('rev-parse HEAD')
     global git_commit # pylint: disable=global-statement
-    git_commit = commit[:7]
+    git_commit = commit[:8]
     if args.quick:
         return
     try:
@@ -1702,7 +1776,7 @@ def check_version(reset=True): # pylint: disable=unused-argument
         else:
             dt = commits["commit"]["commit"]["author"]["date"]
             commit = commits["commit"]["sha"][:8]
-            log.info(f'Version: app=sd.next latest={dt} hash={commit} branch={branch_name}')
+            log.info(f'Version: app="sd.next" latest={dt} branch={branch_name} hash={commit}')
     except Exception as e:
         log.error(f'Repository failed to check version: {e} {commits}')
     ts('latest', t_start)
@@ -1752,7 +1826,7 @@ def get_state():
         def _get_commit(item):
             ext, ext_dir = item
             try:
-                return ext, run('git', 'rev-parse HEAD', cwd=ext_dir)[0].stdout
+                return ext, run('git', 'rev-parse HEAD', cwd=ext_dir)[0].stdout.strip()
             except Exception:
                 return ext, ''
 
@@ -1902,7 +1976,7 @@ def read_options():
 
 def ensure_base_requirements():
     t_start = time.time()
-    setuptools_version = '69.5.1'
+    setuptools_version = '77.0.3'
     if (args.uv or '--uv' in sys.argv) and (shutil.which('uv') is not None): # early enable uv
         args.uv = True # pylint: disable=attribute-defined-outside-init
         uv_info()
@@ -1954,6 +2028,7 @@ def ensure_base_requirements():
     install('rich==15.0.0', 'rich', quiet=True)
     install('psutil', 'psutil', quiet=True)
     install('requests==2.32.3', 'requests', quiet=True)
+    install('Pillow==13.0.0', 'Pillow', quiet=True)
     ts('base', t_start)
 
 

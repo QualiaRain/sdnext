@@ -35,7 +35,7 @@ def create_ui(prompt, negative, styles, _overrides, script_inputs, mp4_fps, mp4_
             with gr.Accordion(label="Sections", open=False):
                 section_prompt = gr.Textbox(label="FP section prompts", elem_id="framepack_section_prompt", lines=2, placeholder="Optional one-line prompt suffix per each video section", interactive=True)
             with gr.Accordion(label="Advanced", open=False):
-                seed = ui_sections.create_seed_inputs('control', reuse_visible=False, subseed_visible=False, accordion=False)[0]
+                seed = ui_sections.create_seed_inputs('control', reuse_visible=False, accordion=False)[0]
                 latent_ws = gr.Slider(label="FP latent window size", minimum=1, maximum=33, value=9, step=1)
                 with gr.Row():
                     steps = gr.Slider(label="FP steps", minimum=1, maximum=100, value=25, step=1)
@@ -54,16 +54,15 @@ def create_ui(prompt, negative, styles, _overrides, script_inputs, mp4_fps, mp4_
                 with gr.Row():
                     system_prompt = gr.Textbox(label="FP system prompt", elem_id="framepack_system_prompt", lines=6, placeholder="Optional system prompt for the model", interactive=True)
                 with gr.Row():
-                    receipe = gr.Textbox(label="FP model receipe", elem_id="framepack_model_receipe", lines=6, placeholder="Model receipe", interactive=True)
+                    receipe = gr.Textbox(label="FP model receipe", elem_id="framepack_model_receipe", lines=6, placeholder="Model receipe", interactive=True, visible=False)
                 with gr.Row():
-                    receipe_get = gr.Button(value="Get receipe", elem_id="framepack_btn_get_model", interactive=True)
-                    receipe_set = gr.Button(value="Set receipe", elem_id="framepack_btn_set_model", interactive=True)
-                    receipe_reset = gr.Button(value="Reset receipe", elem_id="framepack_btn_reset_model", interactive=True)
+                    receipe_get = gr.Button(value="Get receipe", elem_id="framepack_btn_get_model", interactive=True, visible=False)
+                    receipe_set = gr.Button(value="Set receipe", elem_id="framepack_btn_set_model", interactive=True, visible=False)
+                    receipe_reset = gr.Button(value="Reset receipe", elem_id="framepack_btn_reset_model", interactive=True, visible=False)
                 use_teacache = gr.Checkbox(label='FP enable TeaCache', value=True)
                 optimized_prompt = gr.Checkbox(label='FP use optimized system prompt', value=True)
                 use_cfgzero = gr.Checkbox(label='FP enable CFGZero', value=False)
                 use_preview = gr.Checkbox(label='FP enable Preview', value=True)
-                attention = gr.Dropdown(label="FP attention", choices=['Default', 'Xformers', 'FlashAttention', 'SageAttention'], value='Default', type='value')
                 vae_type = gr.Dropdown(label="FP VAE", choices=['Full', 'Tiny', 'Remote'], value='Full', type='value')
 
         with gr.Column(elem_id='framepack-output-column', scale=2) as _column_output:
@@ -88,7 +87,7 @@ def create_ui(prompt, negative, styles, _overrides, script_inputs, mp4_fps, mp4_
     duration.change(fn=change_sections, inputs=[duration, mp4_fps, mp4_interpolate, latent_ws, variant], outputs=[section_html, section_prompt])
     mp4_fps.change(fn=change_sections, inputs=[duration, mp4_fps, mp4_interpolate, latent_ws, variant], outputs=[section_html, section_prompt])
     mp4_interpolate.change(fn=change_sections, inputs=[duration, mp4_fps, mp4_interpolate, latent_ws, variant], outputs=[section_html, section_prompt])
-    btn_load.click(fn=load_model, inputs=[variant, attention], outputs=framepack_outputs)
+    btn_load.click(fn=load_model, inputs=[variant], outputs=framepack_outputs)
     btn_unload.click(fn=unload_model, outputs=framepack_outputs)
     receipe_get.click(fn=framepack_load.get_model, inputs=[], outputs=receipe)
     receipe_set.click(fn=framepack_load.set_model, inputs=[receipe], outputs=[])
@@ -108,7 +107,7 @@ def create_ui(prompt, negative, styles, _overrides, script_inputs, mp4_fps, mp4_
         use_teacache, use_cfgzero, use_preview,
         mp4_fps, mp4_codec, mp4_sf, mp4_video, mp4_frames, mp4_thumb, mp4_opt, mp4_ext, mp4_interpolate,
         mp4_scale, mp4_upscaler,
-        attention, vae_type, variant,
+        vae_type, variant,
         vlm_enhance, vlm_model, vlm_system_prompt,
     ]
 
@@ -120,3 +119,6 @@ def create_ui(prompt, negative, styles, _overrides, script_inputs, mp4_fps, mp4_
         show_progress='hidden',
     )
     generate.click(**framepack_dict)
+    from modules import scheduler
+    schedule = gr.Button(visible=False, elem_id='framepack_schedule_btn')
+    schedule.click(fn=lambda *args: scheduler.enqueue_video_request('framepack', *args), inputs=state_inputs + framepack_inputs + script_inputs, outputs=framepack_outputs, show_progress='hidden')

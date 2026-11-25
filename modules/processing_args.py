@@ -8,9 +8,11 @@ import numpy as np
 from PIL import Image
 from modules import shared, sd_models, processing, processing_vae, processing_helpers, sd_hijack_hypertile, sd_vae
 from modules.logger import log
+from modules.attention import context as attention_context
 from modules.processing_callbacks import diffusers_callback_legacy, diffusers_callback, set_callbacks_p
 from modules.processing_helpers import get_generator, apply_circular # pylint: disable=unused-import
 from modules.processing_prompt import set_prompt
+from modules.lora import network_pdd
 from modules.api import helpers
 
 
@@ -25,11 +27,18 @@ def task_modular_kwargs(p, model):
     p.ops.append('modular')
 
     processing_helpers.resize_init_images(p)
+    if model_cls == 'MingImageModularPipeline' and len(getattr(p, 'init_images', [])) > 0:
+        p.width = max(16, 16 * ((p.width + 8) // 16))
+        p.height = max(16, 16 * ((p.height + 8) // 16))
     task_args['width'] = p.width
     task_args['height'] = p.height
     if len(getattr(p, 'init_images', [])) > 0:
         task_args['image'] = p.init_images
-        task_args['strength'] = p.denoising_strength
+        if model_cls != 'MingImageModularPipeline':
+            task_args['strength'] = p.denoising_strength
+        if (shared.sd_model_type == 'sdxl') and hasattr(model, 'register_to_config') and (model_cls not in sd_models.i2i_pipes):
+            model.register_to_config(requires_aesthetics_score = False)
+
     mask_image = p.task_args.get('image_mask', None) or getattr(p, 'image_mask', None) or getattr(p, 'mask', None)
     if mask_image is not None:
         task_args['mask_image'] = mask_image
@@ -52,6 +61,7 @@ def task_specific_kwargs(p, model):
     model_cls = model.__class__.__name__
     vae_scale_factor = sd_vae.get_vae_scale_factor(model)
     task_args = {}
+    requested_size = (getattr(p, 'width', None), getattr(p, 'height', None)) # resize_init_images overwrites the request with the image size
     is_img2img_model = bool('Zero123' in model_cls)
     task_type = sd_models.get_diffusers_task(model)
     if len(getattr(p, 'init_images', [])) > 0:
@@ -67,8 +77,8 @@ def task_specific_kwargs(p, model):
                 'width': width,
                 'height': height,
             }
-    elif (task_type == sd_models.DiffusersTaskType.IMAGE_2_IMAGE or is_img2img_model) and len(getattr(p, 'init_images', [])) > 0:
-        if shared.sd_model_type == 'sdxl' and hasattr(model, 'register_to_config'):
+    elif (task_type == sd_models.DiffusersTaskType.IMAGE_2_IMAGE or task_type == sd_models.DiffusersTaskType.MODULAR or is_img2img_model) and (len(getattr(p, 'init_images', [])) > 0):
+        if (shared.sd_model_type == 'sdxl') and hasattr(model, 'register_to_config'):
             if model_cls in sd_models.i2i_pipes:
                 pass
             else:
@@ -82,21 +92,17 @@ def task_specific_kwargs(p, model):
             'image': p.init_images,
             'strength': p.denoising_strength,
         }
+        mask_image = p.task_args.get('image_mask', None) or getattr(p, 'image_mask', None) or getattr(p, 'mask', None)
+        if (mask_image is not None) and sd_models.pipe_serves_task(model, sd_models.DiffusersTaskType.INPAINTING): # one class registered for every task keeps this branch for inpaint requests
+            task_args['mask_image'] = mask_image
         if model_cls == 'FluxImg2ImgPipeline' or model_cls == 'FluxKontextPipeline': # needs explicit width/height
             if torch.is_tensor(p.init_images[0]):
-                p.width = p.init_images[0].shape[-1] * vae_scale_factor
-                p.height = p.init_images[0].shape[-2] * vae_scale_factor
+                latent_scale = sd_vae.get_vae_scale_factor(model, patch=False) # pixels per latent
+                p.width = p.init_images[0].shape[-1] * latent_scale
+                p.height = p.init_images[0].shape[-2] * latent_scale
             else:
                 p.width = width
                 p.height = height
-            if model_cls == 'FluxKontextPipeline':
-                aspect_ratio = p.width / p.height
-                max_area = max(p.width, p.height)**2
-                p.width = round((max_area * aspect_ratio) ** 0.5)
-                p.height = round((max_area / aspect_ratio) ** 0.5)
-                p.width = p.width // vae_scale_factor * vae_scale_factor
-                p.height = p.height // vae_scale_factor * vae_scale_factor
-                task_args['max_area'] = max_area
             task_args['width'], task_args['height'] = p.width, p.height
         elif model_cls == 'OmniGenPipeline' or model_cls == 'OmniGen2Pipeline':
             p.width = width
@@ -106,6 +112,11 @@ def task_specific_kwargs(p, model):
                 'height': p.height,
                 'input_images': [p.init_images], # omnigen expects list-of-lists
             }
+        elif model_cls == 'LLaDAImagePipeline':
+            task_args = {
+                'generation_mode': 'editing',
+                'image': p.init_images[0],
+            }
     elif task_type == sd_models.DiffusersTaskType.INSTRUCT and len(getattr(p, 'init_images', [])) > 0:
         p.ops.append('instruct')
         task_args = {
@@ -114,7 +125,7 @@ def task_specific_kwargs(p, model):
             'image': p.init_images,
             'strength': p.denoising_strength,
         }
-    elif (task_type == sd_models.DiffusersTaskType.INPAINTING or is_img2img_model) and len(getattr(p, 'init_images', [])) > 0:
+    elif (task_type == sd_models.DiffusersTaskType.INPAINTING or task_type == sd_models.DiffusersTaskType.MODULAR or is_img2img_model) and len(getattr(p, 'init_images', [])) > 0:
         if shared.sd_model_type == 'sdxl' and hasattr(model, 'register_to_config'):
             if model_cls in [sd_models.i2i_pipes]:
                 pass
@@ -138,7 +149,7 @@ def task_specific_kwargs(p, model):
         }
 
     fake_i2i = ['QwenImageEditPipeline', 'QwenImageEditPlusPipeline', 'WanImageToVideoPipeline', 'ChronoEditPipeline']
-    can_i2i = ['QwenImageEditPipeline', 'QwenImageEditPlusPipeline', 'QwenImageLayeredPipeline', 'Kandinsky5I2IPipeline', 'QwenImageLayeredPipeline', 'WanImageToVideoPipeline','ChronoEditPipeline', 'GoogleNanoBananaPipeline', 'GlmImagePipeline', 'Step1XEditPipeline']
+    can_i2i = ['QwenImageEditPipeline', 'QwenImageEditPlusPipeline', 'QwenImage21Pipeline', 'QwenImageLayeredPipeline', 'Kandinsky5I2IPipeline', 'QwenImageLayeredPipeline', 'WanImageToVideoPipeline','ChronoEditPipeline', 'GoogleNanoBananaPipeline', 'GlmImagePipeline', 'Step1XEditPipeline']
 
     # model specific args
     if (model_cls in fake_i2i) and (len(getattr(p, 'init_images', [])) == 0):
@@ -146,6 +157,8 @@ def task_specific_kwargs(p, model):
         p.init_images = [Image.new('RGB', (p.width, p.height), (0, 0, 0))] # monkey-patch so i2i pipeline does not error-out on t2i
     if (model_cls in can_i2i) and (len(getattr(p, 'init_images', [])) > 0):
         task_args['image'] = p.init_images
+    if (sd_models.get_max_condition_images(model) > 0) and (len(getattr(p, 'init_images', [])) > 0): # otherwise set_pipeline_args sizes the call from the first condition image
+        task_args['width'], task_args['height'] = width, height
 
     if ('QwenImageLayeredPipeline' in model_cls) and (task_args.get('image', None) is not None):
         image_items = task_args['image']
@@ -153,9 +166,9 @@ def task_specific_kwargs(p, model):
             task_args['image'] = [i.convert('RGBA') for i in image_items]
     if ('LatentConsistencyModelPipeline' in model_cls) and (len(p.init_images) > 0):
         p.ops.append('lcm')
-        init_latents = [processing_vae.vae_encode(image, model=shared.sd_model, vae_type=p.vae_type).squeeze(dim=0) for image in p.init_images]
+        init_latents = [processing_vae.vae_encode(image, model=shared.sd_model).squeeze(dim=0) for image in p.init_images]
         init_latent = torch.stack(init_latents, dim=0).to(shared.device)
-        init_noise = p.denoising_strength * processing.create_random_tensors(init_latent.shape[1:], seeds=p.all_seeds, subseeds=p.all_subseeds, subseed_strength=p.subseed_strength, p=p)
+        init_noise = p.denoising_strength * processing.create_random_tensors(init_latent.shape[1:], seeds=p.all_seeds, p=p)
         init_latent = (1 - p.denoising_strength) * init_latent + init_noise
         task_args = {
             'latents': init_latent.to(model.dtype),
@@ -164,6 +177,7 @@ def task_specific_kwargs(p, model):
         }
     if ('WanVACEPipeline' in model_cls) and (p.init_images is not None) and (len(p.init_images) > 0):
         task_args['reference_images'] = p.init_images
+        task_args.pop('mask_image', None) # vace takes a mask only together with video
     if 'BlipDiffusionPipeline' in model_cls:
         if len(p.init_images) == 0:
             log.error('BLiP diffusion requires init image')
@@ -174,6 +188,12 @@ def task_specific_kwargs(p, model):
             'target_subject_category': (getattr(p, 'prompt', '').split() or [''])[-1],
             'output_type': 'pil',
         }
+
+    if (len(getattr(p, 'init_images', [])) > 0) and (None not in requested_size) and (not p.is_hr_pass) and (not getattr(p, 'size_from_input', False)) and ('Size source' not in p.extra_generation_params): # the hires pass upscales its image itself, control sizes from its processed input
+        output_size = (task_args.get('width', width), task_args.get('height', height)) # a call without a size runs at the image size
+        if any(abs(o - r) >= vae_scale_factor for o, r in zip(output_size, requested_size)): # beyond alignment, so nothing fitted the image to the request
+            log.warning(f'Size: source=image requested={requested_size[0]}x{requested_size[1]} image={output_size[0]}x{output_size[1]}')
+            p.extra_generation_params['Size source'] = 'image'
 
     if debug_enabled:
         debug_log(f'Process task specific args: {task_args}')
@@ -196,6 +216,10 @@ def get_defaults(model, kwargs):
     remove = ['return_dict', 'output_type', 'num_images_per_prompt', 'callback', 'callback_on_step_end_tensor_inputs']
     default_cfg = 0
     try:
+        model_name = model.sd_checkpoint_info.name or model.sd_model_checkpoint
+    except Exception:
+        model_name = "unknown"
+    try:
         defaults = {}
         if hasattr(model, 'blocks') and hasattr(model.blocks, 'inputs'):
             for input_param in model.blocks.inputs:
@@ -213,12 +237,11 @@ def get_defaults(model, kwargs):
 
         defaults = {k: v for k, v in defaults.items() if k not in kwargs} # only log defaults that are not already set by kwargs
         defaults = {k: v for k, v in defaults.items() if k not in remove} # remove common args that are not useful to log
-        log.debug(f'Pipeline: cls={model.__class__.__name__} defaults={defaults}')
+        log.debug(f'Pipeline: cls={model.__class__.__name__} model="{model_name}" defaults={defaults}')
         default_cfg = defaults.get('guidance_scale', 0)
     except Exception as e:
         log.error(f'Pipeline defaults: {e}')
     try:
-        model_name = model.sd_checkpoint_info.name or model.sd_model_checkpoint
         is_turbo = getattr(getattr(model, 'config', None), 'is_distilled', False) or 'turbo' in model_name.lower()
         if is_turbo and default_cfg > 1:
             log.warning(f'Pipeline: cls={model.__class__.__name__} model="{model_name}" type=turbo default guidance={default_cfg}')
@@ -254,7 +277,11 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
 
     possible = get_params(model)
 
-    log.debug(f'Pipeline: cls={cls} possible={possible}')
+    pinned = network_pdd.pin(p, model) # installed parallel-decoding heads fix the step count and schedule
+    if pinned is not None and 'num_inference_steps' in possible:
+        kwargs['num_inference_steps'] = pinned
+
+    debug_log(f'Pipeline: cls={cls} possible={possible}')
     steps = kwargs.get("num_inference_steps", None) or len(getattr(p, 'timesteps', ['1']))
     clip_skip = kwargs.pop("clip_skip", 1)
 
@@ -326,6 +353,10 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     # model specific
     if 'Kandinsky' in model.__class__.__name__ or 'Cosmos2' in model.__class__.__name__ or 'OmniGen2' in model.__class__.__name__:
         kwargs['output_type'] = 'np' # only set latent if model has vae
+    if model.__class__.__name__.startswith('Wan') and 'video' not in p.ops:
+        # Image passes need decoded single frames, independent of the loading route.
+        kwargs['num_frames'] = 1
+        kwargs['output_type'] = 'np'
     if 'StableCascade' in model.__class__.__name__:
         kwargs.pop("num_inference_steps") # remove
         if 'prior_num_inference_steps' in possible:
@@ -358,6 +389,16 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
         args.pop('negative_prompt', None) # guidance-distilled, no negative prompt
         if isinstance(args.get('generator', None), list) and len(args['generator']) > 0:
             args['generator'] = args['generator'][0] # >1-element list breaks the audio noise draw
+    if sd_models.takes_single_prompt(model):
+        if isinstance(args.get('prompt', None), list) and len(args['prompt']) > 1 and 'num_images_per_prompt' in possible: # the text encoder step takes one prompt per call
+            args['num_images_per_prompt'] = len(args['prompt'])
+        for key in ('prompt', 'negative_prompt'):
+            if isinstance(args.get(key, None), list):
+                if len(set(args[key])) > 1:
+                    log.warning(f'Pipeline: cls={model.__class__.__name__} {key} differs within the batch, every image gets the first: batch={len(args[key])}')
+                args[key] = args[key][0] if len(args[key]) > 0 else ''
+        if not args.get('negative_prompt', None):
+            args.pop('negative_prompt', None) # an empty negative is omitted, the base text encoder warns about one it will not use
 
     # set callbacks
     if 'prior_callback_steps' in possible:  # Wuerstchen / Cascade
@@ -366,6 +407,7 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
         args['callback_steps'] = 1
 
     set_callbacks_p(p)
+    attention_context.new_pass(steps)
     if 'prior_callback_on_step_end' in possible: # Wuerstchen / Cascade
         args['prior_callback_on_step_end'] = diffusers_callback
         if 'prior_callback_on_step_end_tensor_inputs' in possible:
@@ -414,6 +456,10 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     model_args = getattr(model, 'task_args', {})
     task_kwargs.update(pipe_args or {})
     task_kwargs.update(model_args or {})
+    if ('image' in task_kwargs) and ('image' not in possible) and ('images' in possible): # JoyImageEditPlusPipeline and GoogleNanoBananaPipeline take the list as images
+        task_kwargs['images'] = task_kwargs.pop('image')
+    if ('mask_image' in task_kwargs) and ('mask_image' not in possible) and ('mask' in possible): # BriaFibo2Pipeline takes the inpaint mask as mask
+        task_kwargs['mask'] = task_kwargs.pop('mask_image')
     if debug_enabled:
         debug_log(f'Process task args: {task_kwargs}')
     for k, v in task_kwargs.items():
@@ -434,7 +480,7 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     # handle missing resolution
     if args.get('image', None) is not None and ('width' not in args or 'height' not in args):
         if 'width' in possible and 'height' in possible:
-            vae_scale_factor = sd_vae.get_vae_scale_factor(model)
+            vae_scale_factor = sd_vae.get_vae_scale_factor(model, init_image=True)
             if isinstance(args['image'], torch.Tensor) or isinstance(args['image'], np.ndarray):
                 if args['image'].shape[-1] == 3: # nhwc
                     args['width'] = args['image'].shape[-2]
@@ -481,6 +527,7 @@ def set_pipeline_args(p, model, prompts:list, negative_prompts:list, prompts_2:l
     if generator is not None:
         clean['generator'] = f'{generator[0].device}:{[g.initial_seed() for g in generator]}'
     clean['parser'] = prompt_attention
+    clean['ref'] = sd_models.get_max_condition_images(model) > 0
     for k, v in clean.copy().items():
         if v is None:
             clean[k] = None

@@ -1,12 +1,10 @@
 import io
 import os
-from pathlib import Path
 import time
 import base64
 from secrets import compare_digest
 from urllib.parse import quote, unquote
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import HTTPException
 from starlette.websockets import WebSocket, WebSocketState
 from pydantic import BaseModel, Field # pylint: disable=no-name-in-module
 from PIL import Image
@@ -158,7 +156,7 @@ def register_api(api): # register api
                 username, password = payload.split(':', 1)
             except Exception:
                 return False
-            if username in api.credentials and compare_digest(password, api.credentials[username]):
+            if username in api.credentials and compare_digest(password.encode('utf-8'), api.credentials[username].encode('utf-8')):
                 return True
             if hasattr(api.app, 'tokens') and (api.app.tokens is not None) and (password in api.app.tokens):
                 return True
@@ -178,10 +176,13 @@ def register_api(api): # register api
         # Build list of resolved output paths with labels
         folders = []
         if base_samples:
-            folders.append(make_folder(base_samples, os.path.basename(base_samples.rstrip('/\\'))))
-        if base_grids and base_grids != base_samples:
-            folders.append(make_folder(base_grids, os.path.basename(base_grids.rstrip('/\\'))))
+            base_samples = base_samples.rstrip('/\\')
+            folders.append(make_folder(resolve_output_path(base_samples), "Folders"))
+        if base_grids:
+            base_grids = base_grids.rstrip('/\\')
+            folders.append(make_folder(resolve_output_path(base_grids), "Folders"))
         # Use the specific folder setting values as labels (e.g., "outputs/text" -> "outputs/text")
+        folders.append(make_folder(reference_dir, "Reference"))
         folders.append(make_folder(resolve_output_path(base_samples, shared.opts.outdir_txt2img_samples), shared.opts.outdir_txt2img_samples))
         folders.append(make_folder(resolve_output_path(base_samples, shared.opts.outdir_img2img_samples), shared.opts.outdir_img2img_samples))
         folders.append(make_folder(resolve_output_path(base_samples, shared.opts.outdir_control_samples), shared.opts.outdir_control_samples))
@@ -192,39 +193,47 @@ def register_api(api): # register api
         folders.append(make_folder(resolve_output_path(base_grids, shared.opts.outdir_txt2img_grids), shared.opts.outdir_txt2img_grids))
         folders.append(make_folder(resolve_output_path(base_grids, shared.opts.outdir_img2img_grids), shared.opts.outdir_img2img_grids))
         folders.append(make_folder(resolve_output_path(base_grids, shared.opts.outdir_control_grids), shared.opts.outdir_control_grids))
+
         # Custom browser folders and reference dir
+        custom_folder_paths = set()
         for f in shared.opts.browser_folders.split(','):
             f = f.strip()
             if f:
                 folders.append(make_folder(f))
+                custom_folder_paths.add(f)
         folders.append(make_folder(reference_dir, 'Reference'))
         # Filter empty and duplicates (by path)
-        seen_paths = set()
+        seen_paths = {}
         unique_folders = []
         for f in folders:
             path = f["path"].strip()
-            if path and path not in seen_paths and os.path.isdir(path):
-                seen_paths.add(path)
-                unique_folders.append(f)
-                if shared.demo is not None and path not in shared.demo.allowed_paths:
-                    debug(f'Browser folders allow: {path}')
-                    shared.demo.allowed_paths.append(path)
+            if not path or not os.path.isdir(path):
+                continue
+            if path in seen_paths:
+                if path in custom_folder_paths:
+                    unique_folders[seen_paths[path]] = f
+                continue
+            seen_paths[path] = len(unique_folders)
+            unique_folders.append(f)
+            if (shared.demo is not None) and (path not in shared.demo.allowed_paths):
+                debug(f'Browser folders allow: {path}')
+                shared.demo.allowed_paths.append(path)
+        if os.environ.get('SD_PATH_DEBUG', None):
+            log.trace(f'Path allowed: why=gallery allowed={shared.demo.allowed_paths}')
         debug(f'Browser folders: {unique_folders}')
         return unique_folders
 
     # @app.get("/sdapi/v1/browser/thumb", response_model=dict)
     async def get_thumb(file: str, exif: bool = False):
         try:
-            decoded = unquote(file).replace('%3A', ':')
-            allowed_dirs = shared.demo.allowed_paths
-            if not any(Path(folder).absolute() in Path(file).absolute().parents for folder in allowed_dirs):
-                raise HTTPException(status_code=403, detail=f"file {file}: must be in one of allowed directories")
-            if decoded.lower().endswith('.mp4'):
-                return JSONResponse(content=get_video_thumbnail(decoded))
+            from modules.api import helpers
+            fn = helpers.validate_path(file, shared.demo.allowed_paths)
+            if fn.lower().endswith('.mp4'):
+                return JSONResponse(content=get_video_thumbnail(fn))
             else:
-                return JSONResponse(content=get_image_thumbnail(decoded, exif))
+                return JSONResponse(content=get_image_thumbnail(fn, exif))
         except Exception as e:
-            log.error(f'Gallery: {file} {e}')
+            log.error(f'Gallery: file="{file}" {e}')
             content = { 'error': str(e) }
             return JSONResponse(content=content)
 
@@ -232,9 +241,8 @@ def register_api(api): # register api
     async def ht_files(folder: str):
         try:
             t0 = time.time()
-            allowed_dirs = shared.demo.allowed_paths
-            if not any(Path(folder).absolute() in Path(folder).absolute().parents for folder in allowed_dirs):
-                raise HTTPException(status_code=403, detail=f"folder {folder}: must be in one of allowed directories")
+            from modules.api import helpers
+            folder = helpers.validate_path(folder, allowed_folder=True)
             files = files_cache.directory_files(folder, recursive=True)
             lines = []
             for f in files:
@@ -280,3 +288,5 @@ def register_api(api): # register api
         except Exception as e:
             debug(f'WS error: {e}')
         manager.disconnect(ws)
+
+    get_folders() # initialize all folders

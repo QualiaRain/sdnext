@@ -1,7 +1,11 @@
 import os
 import time
+import contextlib
+from functools import wraps
+import torch
 from modules import shared, errors, timer, sd_models
 from modules.logger import log
+from modules.attention import context as attention_context
 
 
 class PromptCache:
@@ -10,32 +14,63 @@ class PromptCache:
         self.id = None
         self.max = 16
 
-    def get(self, prompt):
-        if self.id != id(shared.sd_model):
+    @staticmethod
+    def _hashable(val):
+        if isinstance(val, list):
+            return tuple(val)
+        return val
+
+    def get(self, prompt, negative_prompt=None, cfg_enabled=None):
+        current_id = id(shared.sd_model.sd_checkpoint_info) if hasattr(shared.sd_model, 'sd_checkpoint_info') else id(shared.sd_model)
+        if self.id != current_id:
             self.cache.clear()
-            self.id = id(shared.sd_model)
+            self.id = current_id
             log.debug(f'Encode: prompt cache activate id={self.id} depth={len(self.cache)}')
+        negative_prompt = self._hashable(negative_prompt)
         if (isinstance(prompt, list) and len(prompt) == 1 and isinstance(prompt[0], str)):
-            cached = self.cache.get(prompt[0], None)
+            cached = self.cache.get((prompt[0], negative_prompt, cfg_enabled), None)
         elif isinstance(prompt, str):
-            cached = self.cache.get(prompt, None)
+            cached = self.cache.get((prompt, negative_prompt, cfg_enabled), None)
         else:
             cached = None
         if cached:
-            log.debug(f'Encode: prompt="{prompt}" cache={len(self.cache)} hit')
+            if isinstance(prompt, list):
+                length = sum(len(p) for p in prompt if isinstance(p, str))
+                log.debug(f'Encode: length={length} cache={len(self.cache)} prompt={prompt}')
+            else:
+                length = len(prompt) if isinstance(prompt, str) else 0
+                log.debug(f'Encode: length={length} cache={len(self.cache)} prompt="{prompt}"')
         return cached
 
-    def set(self, prompt, encoded):
+    def set(self, prompt, encoded, negative_prompt=None, cfg_enabled=None):
         if len(self.cache) >= self.max:
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
+        negative_prompt = self._hashable(negative_prompt)
         if (isinstance(prompt, list) and len(prompt) == 1 and isinstance(prompt[0], str)):
-            self.cache[prompt[0]] = encoded
+            self.cache[(prompt[0], negative_prompt, cfg_enabled)] = encoded
         elif isinstance(prompt, str):
-            self.cache[prompt] = encoded
+            self.cache[(prompt, negative_prompt, cfg_enabled)] = encoded
 
 
 prompt_cache = PromptCache()
+
+
+def compile_stance(target='TE'):
+    # SDNQ compiles static-shape helpers, so variable prompt lengths and image sizes can cause repeated recompiles without a warmup speedup
+    if not shared.opts.torch_skip_compile_te or target in shared.opts.cuda_compile or not hasattr(torch.compiler, 'set_stance'):
+        return contextlib.nullcontext()
+    return torch.compiler.set_stance('force_eager')
+
+
+def with_compile_stance(target='TE'):
+    def decorate(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            with compile_stance(target):
+                return func(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 def hijack_encode_prompt(*args, **kwargs):
@@ -55,24 +90,35 @@ def hijack_encode_prompt(*args, **kwargs):
         res = prompt
 
         if hasattr(shared.sd_model, 'before_prompt_encode'):
-            log.debug(f'Encode: prompt="{prompt}" op=before')
-            res = shared.sd_model.before_prompt_encode(prompt)
+            log.debug('Encode: op=before')
+            prompt = shared.sd_model.before_prompt_encode(prompt)
             if patch_prompt:
-                args_copy[0] = res
+                args_copy[0] = prompt
 
-        cached = prompt_cache.get(prompt)
+        # cache key must include cfg-affecting kwargs since encode_prompt output may or may not include negative embeddings
+        negative_prompt = kwargs.get('negative_prompt', None)
+        cfg_enabled = kwargs.get('do_classifier_free_guidance', None) or kwargs.get('guidance_scale', 0) > 1
+        cacheable = kwargs.get('image', None) is None
+        cached = prompt_cache.get(prompt, negative_prompt, cfg_enabled) if cacheable else None
         if cached is not None:
             res = cached
         else:
-            log.debug(f'Encode: prompt="{prompt}" hijack=True')
-            if hasattr(shared.sd_model, 'orig_encode_prompt'):
-                res = shared.sd_model.orig_encode_prompt(*args_copy, **kwargs)
+            if isinstance(prompt, list):
+                length = sum(len(p) for p in prompt if isinstance(p, str))
+                log.debug(f'Encode: length={length} prompt={prompt} hijack=True')
             else:
-                res = shared.sd_model.encode_prompt(*args_copy, **kwargs)
-            prompt_cache.set(prompt, res)
+                length = len(prompt) if isinstance(prompt, str) else 0
+                log.debug(f'Encode: length={length} prompt="{prompt}" hijack=True')
+            with attention_context.role('te'), compile_stance():
+                if hasattr(shared.sd_model, 'orig_encode_prompt'):
+                    res = shared.sd_model.orig_encode_prompt(*args_copy, **kwargs)
+                else:
+                    res = shared.sd_model.encode_prompt(*args_copy, **kwargs)
+            if cacheable:
+                prompt_cache.set(prompt, res, negative_prompt, cfg_enabled)
 
         if hasattr(shared.sd_model, 'after_prompt_encode'):
-            log.debug(f'Encode: prompt="{prompt}" op=after')
+            log.debug('Encode: op=after')
             res = shared.sd_model.after_prompt_encode(res)
 
     except Exception as e:

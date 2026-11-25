@@ -71,6 +71,8 @@ def file_to_legacy_dict(f) -> dict:
         'size': int(f.size_kb * 1024),
         'name': f.name,
         'type': f.type,
+        'primary': bool(f.primary),
+        'metadata': {'fp': f.metadata.fp, 'format': f.metadata.format, 'size': f.metadata.size, 'quantType': f.metadata.quant_type},
         'hashes': [h for h in [f.hashes.sha256, f.hashes.autov1, f.hashes.autov2, f.hashes.autov3, f.hashes.crc32, f.hashes.blake3] if h],
         'url': f.download_url,
     }
@@ -158,6 +160,15 @@ def get_version_by_hash(hash_str: str, token: str | None = None):
     return version_to_dict(version)
 
 
+def get_version_mini(version_id: int, token: str | None = None):
+    """Download-shaped version view carrying permission and early-access flags."""
+    from modules.civitai.client_civitai import client
+    version = client.get_version_mini(version_id, token=token)
+    if version is None:
+        return JSONResponse(content={"error": "version not found"}, status_code=404)
+    return version_to_dict(version)
+
+
 def get_options():
     """Get valid types, sort, period, base_models from CivitAI API discovery."""
     from modules.civitai.client_civitai import client
@@ -196,7 +207,10 @@ def get_me(token: str | None = None):
 # ---------------------------------------------------------------------------
 
 def post_download(request: dict):
-    """Queue a download. Returns the download item with its ID."""
+    """Queue a download. Returns the download item with its ID.
+
+    Callers send either url + filename, or version_id + file_id, in which case
+    the server resolves the url, save name, hash and companion type itself."""
     from modules.civitai.download_civitai import download_manager
     url = request.get('url', '')
     filename = request.get('filename', '')
@@ -211,8 +225,23 @@ def post_download(request: dict):
     version_id = request.get('version_id', 0)
     version_name = request.get('version_name', '')
     nsfw = request.get('nsfw', False)
+    file_id = request.get('file_id', 0)
+    if not url and version_id and file_id:
+        from modules.civitai.names_civitai import resolve_file
+        resolved, error, status = resolve_file(int(version_id), int(file_id), token=token)
+        if resolved is None:
+            return JSONResponse(content={"error": error}, status_code=status)
+        url = resolved['url']
+        filename = filename or resolved['filename']
+        expected_hash = expected_hash or resolved['expected_hash']
+        model_type = request.get('model_type') or resolved['model_type']
+        model_name = model_name or resolved['model_name']
+        base_model = base_model or resolved['base_model']
+        model_id = model_id or resolved['model_id']
+        version_name = version_name or resolved['version_name']
+        nsfw = nsfw or resolved['nsfw']
     if not url:
-        return JSONResponse(content={"error": "url is required"}, status_code=400)
+        return JSONResponse(content={"error": "url, or version_id and file_id, is required"}, status_code=400)
     if not folder:
         from modules.civitai.filemanage_civitai import resolve_save_path
         folder = str(resolve_save_path(
@@ -255,93 +284,29 @@ def get_download_status():
     return download_manager.status()
 
 
-peek_cache = None
-
-
-def peek_cache_get(file_id: int, url: str):
-    """Persistent probe cache keyed by civitai file id; content per id is
-    immutable, so entries never expire. A url hash guards against id reuse."""
-    global peek_cache  # pylint: disable=global-statement
-    import hashlib
-    from modules import paths
-    from modules.json_helpers import readfile
-    if peek_cache is None:
-        peek_cache = readfile(paths.civitai_probe_file, silent=True, lock=True, as_type='dict')
-    entry = peek_cache.get(str(file_id))
-    if entry and entry.get('url_hash') == hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]:
-        return entry.get('response')
-    return None
-
-
-def peek_cache_put(file_id: int, url: str, response: dict):
-    import hashlib
-    from modules import paths
-    from modules.json_helpers import writefile
-    peek_cache[str(file_id)] = {
-        'url_hash': hashlib.sha256(url.encode('utf-8')).hexdigest()[:16],
-        'response': response,
-    }
-    writefile(peek_cache, paths.civitai_probe_file, silent=True, atomic=True)
-
-
 def get_peek_header(url: str, file_id: int = 0):
     """Read a remote safetensors JSON header via ranged requests. Returns the
     __metadata__ block plus a full model_probe analysis (architecture,
     dtypes, quant scheme) without downloading the file."""
-    import json
-    import struct
-    from modules import shared
-    # civitai.red serves the same download service and rewrites downloadUrl to
-    # its own host; normalize so the guard, cache hash and fetch host agree.
-    url = url.replace('https://civitai.red/', 'https://civitai.com/', 1)
-    if not url.startswith('https://civitai.com/'):
-        return JSONResponse(content={"error": "only civitai urls are allowed"}, status_code=400)
-    if file_id:
-        cached = peek_cache_get(file_id, url)
-        if cached is not None:
-            return cached
-    base_headers = {}
-    token = getattr(shared.opts, 'civitai_token', '') or ''
-    if token:
-        base_headers['Authorization'] = f'Bearer {token}'
-
-    def read_range(start: int, end: int) -> bytes:
-        r = shared.req(url, headers={**base_headers, 'Range': f'bytes={start}-{end}'}, stream=True)
-        status = getattr(r, 'status_code', 500)
-        if status not in (200, 206):
-            raise RuntimeError(f'HTTP {status}')
-        want = end - start + 1
-        # A 200 reply means the server ignored the range and sends from byte 0.
-        need = end + 1 if status == 200 else want
-        buf = b''
-        try:
-            for chunk in r.iter_content(chunk_size=65536):
-                buf += chunk
-                if len(buf) >= need:
-                    break
-        finally:
-            r.close()
-        return buf[start:start + want] if status == 200 else buf[:want]
-
+    from modules.civitai.peek_civitai import peek_header
     try:
-        prefix = read_range(0, 7)
-        if len(prefix) < 8:
-            return {"metadata": None, "error": "short read"}
-        header_len = struct.unpack('<Q', prefix)[0]
-        if header_len <= 0 or header_len > 16 * 1024 * 1024:
-            return {"metadata": None, "error": f"implausible header length: {header_len}"}
-        header = json.loads(read_range(8, 7 + header_len).decode('utf-8'))
-    except Exception as e:
-        return {"metadata": None, "error": str(e)}
-    from modules import model_probe
-    response = {
-        "metadata": header.get('__metadata__'),
-        "tensors": len([k for k in header if k != '__metadata__']),
-        "probe": model_probe.analyze_header(header),
+        return peek_header(url, file_id)
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
+
+
+def get_version_names(version_id: int, token: str | None = None):
+    """Save names for every file of a version, as the download route would choose them."""
+    from modules.civitai.names_civitai import fetch_version, version_context, version_names, precision_enabled
+    version, error, status = fetch_version(version_id, token=token)
+    if version is None:
+        return JSONResponse(content={"error": error}, status_code=status)
+    precision = precision_enabled()
+    return {
+        "version_id": version.id,
+        "precision": precision,
+        "files": version_names(version, version_context(version), precision),
     }
-    if file_id:
-        peek_cache_put(file_id, url, response)
-    return response
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +322,7 @@ def get_settings():
         "save_subfolder": getattr(shared.opts, 'civitai_save_subfolder', '{{BASEMODEL}}'),
         "save_type_folders": getattr(shared.opts, 'civitai_save_type_folders', ''),
         "discard_hash_mismatch": getattr(shared.opts, 'civitai_discard_hash_mismatch', True),
+        "save_precision": getattr(shared.opts, 'civitai_save_precision', True),
         "download_workers": getattr(shared.opts, 'civitai_download_workers', 2),
     }
 
@@ -374,14 +340,17 @@ def post_settings(request: dict):
             if user is None:
                 return JSONResponse(content={"error": "Invalid API token"}, status_code=400)
             log.info(f'CivitAI token validated: user={user.get("username", "?")}')
-        shared.opts.data['civitai_token'] = token.strip()
+        shared.opts.civitai_token = token.strip()
     save_subfolder_enabled = request.get('save_subfolder_enabled')
     if save_subfolder_enabled is not None:
-        shared.opts.data['civitai_save_subfolder_enabled'] = bool(save_subfolder_enabled)
+        shared.opts.civitai_save_subfolder_enabled = bool(save_subfolder_enabled)
     if save_subfolder is not None:
-        shared.opts.data['civitai_save_subfolder'] = save_subfolder
+        shared.opts.civitai_save_subfolder = save_subfolder
     if discard_hash_mismatch is not None:
-        shared.opts.data['civitai_discard_hash_mismatch'] = discard_hash_mismatch
+        shared.opts.civitai_discard_hash_mismatch = discard_hash_mismatch
+    save_precision = request.get('save_precision')
+    if save_precision is not None:
+        shared.opts.civitai_save_precision = bool(save_precision)
     shared.opts.save()
     return get_settings()
 
@@ -415,9 +384,12 @@ def post_metadata_scan(request: dict | None = None):
     from modules.civitai import metadata_civitai
     page = (request or {}).get('page', None)
     results = []
-    for batch in metadata_civitai.civit_search_metadata(title=page, raw=True):
-        if isinstance(batch, list):
-            results = batch
+    try:
+        for batch in metadata_civitai.civit_search_metadata(title=page, raw=True):
+            if isinstance(batch, list):
+                results = batch
+    except metadata_civitai.SweepBusy as e:
+        return JSONResponse(content={"error": str(e)}, status_code=409)
     return {"results": results}
 
 
@@ -425,9 +397,12 @@ def post_metadata_update():
     """Update local metadata from CivitAI."""
     from modules.civitai import metadata_civitai
     items = []
-    for batch in metadata_civitai.civit_update_metadata(raw=True):
-        if isinstance(batch, list):
-            items = batch
+    try:
+        for batch in metadata_civitai.civit_update_metadata(raw=True):
+            if isinstance(batch, list):
+                items = batch
+    except metadata_civitai.SweepBusy as e:
+        return JSONResponse(content={"error": str(e)}, status_code=409)
     results = []
     for item in items:
         results.append({
@@ -550,7 +525,6 @@ def buildsidecar_index():
                     continue
                 # Match the companion file to a JSON entry by size (sizeKB)
                 companion_size_kb = os.path.getsize(companion) / 1024.0
-                companion_name = os.path.basename(base)
                 best_sha = None
                 best_diff = float('inf')
                 for v in data.get('modelVersions', []):
@@ -563,7 +537,7 @@ def buildsidecar_index():
                                 best_sha = sha
                                 best_diff = diff
                 if best_sha:
-                    sidecar_index[best_sha.lower()] = {"filename": companion_name, "type": model_type}
+                    sidecar_index[best_sha.lower()] = {"filename": companion, "type": model_type}
             except Exception:
                 continue
     log.debug(f'CivitAI sidecar index: {len(sidecar_index)} hashes from sidecar files')
@@ -580,54 +554,60 @@ def invalidatesidecar_index():
 # ---------------------------------------------------------------------------
 
 def post_check_local(request: dict):
-    """Check which SHA256 hashes correspond to locally downloaded files."""
+    """Check which SHA256 hashes correspond to local model files, dropping hash cache entries whose files are gone."""
     from modules import hashes as hash_module
-    input_hashes = request.get('hashes', [])
-    if not input_hashes:
+    from modules.civitai.filemanage_civitai import hash_cache_path, prune_hash_cache
+    requested = [str(h) for h in request.get('hashes', []) if h]
+    if not requested:
         return {"found": {}}
-    # Build reverse lookup: lowercase sha256 -> {filename, type}
+    prune_hash_cache()
+    wanted = {h.lower() for h in requested}
+    titles_by_sha: dict[str, list[str]] = {}
+    for title, entry in list(hash_module.cache().items()):
+        sha = (entry.get("sha256") or "").lower()
+        if sha in wanted:
+            titles_by_sha.setdefault(sha, []).append(title)
     found = {}
-    for title, entry in hash_module.cache().items():
-        sha = entry["sha256"]
-        if not sha:
-            continue
-        parts = title.split("/", 1)
-        file_type = parts[0] if len(parts) > 1 else "unknown"
-        found[sha.lower()] = {"filename": title, "type": file_type}
-    # Supplement from in-memory checkpoint registry
+    gone = []
+    for sha, titles in titles_by_sha.items():
+        for title in titles:
+            path = hash_cache_path(title)
+            if path is None: # no loaded registry names the file
+                continue
+            if os.path.exists(path):
+                found[sha] = {"filename": path, "type": title.split("/", 1)[0]}
+                break
+            gone.append(title)
+    if gone:
+        for title in gone:
+            hash_module.cache().pop(title, None)
+        hash_module.save_cache()
+        log.debug(f'CivitAI check local: pruned={len(gone)} hash cache entries without files')
     try:
         from modules.sd_checkpoint import checkpoints_list
-        for _title, cp in checkpoints_list.items():
-            if cp.sha256:
-                key = cp.sha256.lower()
-                if key not in found:
-                    found[key] = {"filename": cp.filename, "type": "checkpoint"}
+        for cp in checkpoints_list.values():
+            key = (cp.sha256 or "").lower()
+            if key in wanted and key not in found and os.path.exists(cp.filename):
+                found[key] = {"filename": cp.filename, "type": "checkpoint"}
     except Exception:
         pass
-    # Supplement from in-memory LoRA registry
     try:
         from modules.lora.lora_load import available_networks
-        for _name, net in available_networks.items():
-            if net.hash:
-                key = net.hash.lower()
-                if key not in found:
-                    found[key] = {"filename": net.filename, "type": "lora"}
+        for net in available_networks.values():
+            key = (net.hash or "").lower()
+            if key in wanted and key not in found and os.path.isfile(net.filename):
+                found[key] = {"filename": net.filename, "type": "lora"}
     except Exception:
         pass
-    # Supplement from sidecar index (covers files never hashed locally)
     sidecar = buildsidecar_index()
-    for h in input_hashes:
-        if not h:
-            continue
-        key = h.lower()
-        if key not in found and key in sidecar:
-            found[key] = sidecar[key]
-    # Match requested hashes
     result = {}
-    for h in input_hashes:
-        if not h:
-            continue
-        match = found.get(h.lower())
+    for h in requested:
+        key = h.lower()
+        match = found.get(key)
+        if match is None:
+            entry = sidecar.get(key)
+            if entry and os.path.isfile(entry["filename"]):
+                match = entry
         if match:
             result[h] = match
     return {"found": result}
@@ -664,7 +644,7 @@ def legacy_get_civitai(
             query=query, tag=tag, types=types, sort=sort, period=period,
             nsfw=nsfw, limit=limit, base=base, token=token, exact=exact,
         )
-        return [model_to_legacy_dict(m) for m in models]
+        return [model_to_legacy_dict(m) for m in models.items]
     return JSONResponse(content=[], status_code=200)
 
 
@@ -672,8 +652,11 @@ def legacy_post_civitai(page: str | None = None):
     """Legacy POST /sdapi/v1/civitai — scan metadata."""
     from modules.civitai import metadata_civitai
     result = []
-    for r in metadata_civitai.civit_search_metadata(title=page, raw=True):
-        result = r
+    try:
+        for r in metadata_civitai.civit_search_metadata(title=page, raw=True):
+            result = r
+    except metadata_civitai.SweepBusy as e:
+        return JSONResponse(content={"error": str(e)}, status_code=409)
     return result
 
 
@@ -687,6 +670,8 @@ def register_api(api):
     api.add_api_route("/sdapi/v2/civitai/model/{model_id}", get_model, methods=["GET"], tags=["CivitAI"])
     api.add_api_route("/sdapi/v2/civitai/version/{version_id}", get_version, methods=["GET"], tags=["CivitAI"])
     api.add_api_route("/sdapi/v2/civitai/version/by-hash/{hash_str}", get_version_by_hash, methods=["GET"], tags=["CivitAI"])
+    api.add_api_route("/sdapi/v2/civitai/version/mini/{version_id}", get_version_mini, methods=["GET"], tags=["CivitAI"])
+    api.add_api_route("/sdapi/v2/civitai/version/{version_id}/names", get_version_names, methods=["GET"], tags=["CivitAI"])
     api.add_api_route("/sdapi/v2/civitai/options", get_options, methods=["GET"], tags=["CivitAI"])
     api.add_api_route("/sdapi/v2/civitai/tags", get_tags, methods=["GET"], tags=["CivitAI"])
     api.add_api_route("/sdapi/v2/civitai/creators", get_creators, methods=["GET"], tags=["CivitAI"])

@@ -170,6 +170,11 @@ def patch_gradio():
     except Exception:
         log.error(f'Gradio patch: version={gradio.__version__} preprocess_data not found')
         orig_blocks_preprocess_data = None
+    try:
+        orig_make_temp_copy_if_needed = gradio.components.IOComponent.make_temp_copy_if_needed
+    except Exception:
+        log.error(f'Gradio patch: version={gradio.__version__} make_temp_copy_if_needed not found')
+        orig_make_temp_copy_if_needed = None
 
     async def wrap_cancel_tasks(task_ids: set[str]):
         log.error(f'Gradio cancel: task={task_ids}')
@@ -208,13 +213,13 @@ def patch_gradio():
                 return {"is_generating": False, "data": [], "error": "empty response"}
             return response
         except GeneratorExit as e:
-            log.error(f"Gradio queue: events={len(events)} batch={batch} error: {e}")
+            log.error(f"Gradio queue: events={len(events)} batch={batch} reason=GeneratorExit {e}")
             return {"is_generating": False, "data": [None, None, None, None, "cancelled", ""], "error": None}
         except Exception as e:
-            log.error(f"Gradio queue: events={len(events)} batch={batch} error: {e}")
+            log.error(f"Gradio queue: events={len(events)} batch={batch} reason=Exception {e}")
             raise
         except BaseException as e:
-            log.error(f"Gradio queue: events={len(events)} batch={batch} error: {e}")
+            log.error(f"Gradio queue: events={len(events)} batch={batch} reason=BaseException {e}")
             raise
 
     def wrap_blocks_preprocess_data(self, fn_index: int, inputs: list, state: dict):
@@ -222,6 +227,17 @@ def patch_gradio():
             return orig_blocks_preprocess_data(self, fn_index, inputs, state)
         except Exception as e:
             log.error(f"Gradio preprocess: {e}")
+            if 'No such file or directory' in str(e):
+                return None
+            raise
+
+    def wrap_make_temp_copy_if_needed(self, file_path) -> str:
+        try:
+            return orig_make_temp_copy_if_needed(self, file_path)
+        except Exception as e:
+            log.error(f"Gradio temp file: {e}")
+            if 'No such file or' in str(e):
+                return file_path
             raise
 
     if orig_call_prediction is not None:
@@ -232,6 +248,8 @@ def patch_gradio():
         gradio.utils.cancel_tasks = wrap_cancel_tasks
     if orig_blocks_preprocess_data is not None:
         gradio.blocks.Blocks.preprocess_data = wrap_blocks_preprocess_data
+    if orig_make_temp_copy_if_needed is not None:
+        gradio.components.IOComponent.make_temp_copy_if_needed = wrap_make_temp_copy_if_needed
 
 
 def patch_gradio_future():
@@ -277,6 +295,7 @@ def init():
     original_BlockContext_init = patches.patch(__name__, obj=gradio.blocks.BlockContext, field="__init__", replacement=BlockContext_init)
     original_Blocks_get_config_file = patches.patch(__name__, obj=gradio.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file)
     patch_gradio()
+    gr_tempdir.patch_video_conversion()
     if not gradio.__version__.startswith('3.43'):
         patch_gradio_future()
     hijacked = True

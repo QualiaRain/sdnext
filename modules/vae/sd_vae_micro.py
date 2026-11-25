@@ -1,0 +1,102 @@
+import os
+import torch
+import torch.nn.functional as F
+import safetensors.torch
+import huggingface_hub as hf
+from modules import devices, shared, paths, sd_vae
+from modules.logger import log
+from modules.vae.sd_vae_micro_model import MicroDecoder
+from modules.vae.model_map import get_vae_type
+
+
+decoder = None
+decoder_cls = None
+repo_id = 'SD-Next/MicroDecoder'
+warned = None
+supported = ['sd', 'sdxl', 'sd3', 'f1', 'f2', 'hy', 'dcae', 'mage', 'qwen', 'qwen21', 'wan21', 'wan22', 'minimaxh3', 'cog']
+
+
+def get_timestep() -> torch.Tensor:
+    step = getattr(shared.state, 'sampling_step', 0)
+    steps = getattr(shared.state, 'sampling_steps', 0)
+    ts = getattr(shared.state, 'timestep', 0)
+    try:
+        ts_val = float(ts)
+    except (TypeError, ValueError):
+        ts_val = 0.0
+    if steps > 0 and step > 0:
+        t_val = max(0.0, min(1.0, 1.0 - (float(step) / float(steps))))
+    elif ts_val > 1.0:
+        t_val = max(0.0, min(1.0, ts_val / 1000.0))
+    elif ts_val > 0.0:
+        t_val = max(0.0, min(1.0, ts_val))
+    else:
+        t_val = 0.0
+    return torch.tensor([[t_val]], device=devices.device, dtype=devices.dtype)
+
+
+def decode(latents: torch.Tensor) -> torch.Tensor:
+    global decoder, decoder_cls, warned  # pylint: disable=global-statement
+
+    def warn_once(e: Exception):
+        global warned  # pylint: disable=global-statement
+        if warned != shared.sd_model_type:
+            log.error(f'Decode: repo="{repo_id}" target={vae_cls} {str(e)}')
+            log.trace(f'Decode: timestep={get_timestep().item():.3f} shape={list(latents.shape)} channels={in_channels} scale={scale_factor} min={latents.min():.2f} max={latents.max():.2f}')
+            warned = shared.sd_model_type
+
+    vae_cls = get_vae_type()
+    scale_factor = sd_vae.get_vae_scale_factor(patch=False)
+    in_channels = sd_vae.get_vae_channels()
+
+    if vae_cls is None:
+        return latents
+    if vae_cls not in supported:
+        warn_once(RuntimeError(f'type={vae_cls} unsupported'))
+        return latents
+    if (latents is None) or (latents.ndim == 2): # likely packed latents that we cant handle directly
+        return latents
+
+    if (decoder is None) or (decoder_cls != vae_cls): # load or reload the decoder if not initialized or if the VAE type has changed
+        model_folder = os.path.join(paths.models_path, "Preview")
+        os.makedirs(model_folder, exist_ok=True)
+        model_file = f'microdecoder-{vae_cls}.safetensors'
+        if os.path.exists(os.path.join(model_folder, model_file)): # attempt local-first
+            model_path = os.path.join(model_folder, model_file)
+        else:
+            try:
+                model_path = hf.hf_hub_download(repo_id=repo_id, filename=model_file, local_dir=model_folder)
+            except Exception as e:
+                warn_once(e)
+                return latents
+            if not os.path.exists(model_path):
+                warn_once(RuntimeError(f'MicroDecoder: repo="{repo_id}" target={vae_cls} file="{model_path}" not found'))
+                return latents
+
+        state_dict = safetensors.torch.load_file(model_path, device=str(devices.device))
+        hidden_dim = state_dict["in_proj.0.weight"].shape[0] if "in_proj.0.weight" in state_dict else 256 # dynamically detect hidden_dim from checkpoint weights if present
+        in_ch = state_dict["in_proj.0.weight"].shape[1] if "in_proj.0.weight" in state_dict else in_channels
+        num_up = sum(1 for k in state_dict if k.startswith("up_blocks.") and k.endswith(".conv.weight"))
+        chk_scale = (2 ** num_up) if num_up > 0 else 1
+        decoder = MicroDecoder(in_channels=in_ch, hidden_dim=hidden_dim, scale_factor=chk_scale).to(device=devices.device, dtype=devices.dtype)
+        log.info(f'\nDecode: type=Micro file="{model_path}" target={vae_cls} channels={in_ch} dim={hidden_dim} scale={chk_scale} latents={list(latents.shape)}')
+        decoder.load_state_dict(state_dict)
+        decoder.to(device=devices.device, dtype=devices.dtype)
+        decoder.eval()
+        decoder_cls = vae_cls
+        warned = None
+        del state_dict
+
+
+    target_size = (latents.shape[-2] * scale_factor, latents.shape[-1] * scale_factor)
+    try:
+        with devices.inference_context():
+            rgb = decoder(latents.to(device=devices.device, dtype=devices.dtype), t=get_timestep())
+    except Exception as e:
+        warn_once(e)
+        return latents
+
+    if rgb.shape[-2:] != target_size:
+        rgb = F.interpolate(rgb, size=target_size, mode="bilinear", align_corners=False)
+
+    return rgb.clamp(0.0, 1.0)

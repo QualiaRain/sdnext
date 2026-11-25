@@ -35,6 +35,7 @@ export class ConnectionMonitorState {
   }
 
   static setData({ online, data }: { online: boolean; data: VersionInfo }) {
+    window.serverOnline = online;
     if (online !== this.online) {
       this.online = online;
       this.ts = new Date();
@@ -65,7 +66,7 @@ export class ConnectionMonitorState {
       else return;
     }
     this.element.dataset.hint = this.toHTML();
-    this.element.style.backgroundColor = this.online ? 'var(--sd-main-accent-color)' : 'var(--color-error)';
+    this.element.style.background = this.online ? 'var(--sd-main-accent-color)' : 'var(--color-error)';
   }
 }
 

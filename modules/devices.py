@@ -239,7 +239,7 @@ def torch_gc(force: bool = False, fast: bool = False, reason: str | None = None)
                     torch.accelerator.synchronize()
                 if hasattr(torch.accelerator, "empty_cache"):
                     torch.accelerator.empty_cache()
-                if hasattr(torch.accelerator, "empty_host_cache"):
+                if hasattr(torch.accelerator, "empty_host_cache") and backend != 'mps':
                     torch.accelerator.empty_host_cache()
                 if torch.cuda.is_available() and hasattr(torch.cuda, "ipc_collect"):
                     torch.cuda.ipc_collect()
@@ -449,9 +449,13 @@ def test_triton(early: bool = False):
             except Exception:
                 pass
         torch_info.set(triton=triton_version)
+    try:
+        triton_threads = torch._inductor.config.decide_compile_threads() # pylint: disable=protected-access
+    except Exception:
+        triton_threads = None
     t1 = time.time()
     fn = f'{sys._getframe(2).f_code.co_name}:{sys._getframe(1).f_code.co_name}' # pylint: disable=protected-access
-    log.debug(f'Triton: pass={triton_ok} version={triton_version} fn={fn} time={t1-t0:.2f}')
+    log.debug(f'Triton: pass={triton_ok} version={triton_version} fn={fn} threads={triton_threads} time={t1-t0:.2f}')
     return triton_ok
 
 
@@ -493,65 +497,60 @@ def override_ipex_math():
             log.warning(f'Torch ipex: {e}')
 
 
+def report_attention():
+    from importlib.metadata import version
+    try:
+        flash = version('flash-attn')
+    except Exception:
+        flash = False
+    try:
+        sage = version('sageattention')
+    except Exception:
+        sage = False
+    try:
+        xformers = version('xformers')
+    except Exception:
+        xformers = False
+    try:
+        kernels = version('kernels')
+    except Exception:
+        kernels = False
+    from diffusers.models import attention_dispatch as a
+    try:
+        import sdnq
+        sdnq_ver = sdnq.__version__
+    except Exception:
+        sdnq_ver = False
+    # log.debug(f'Attention available: flash={a._CAN_USE_FLASH_ATTN} flash3={a._CAN_USE_FLASH_ATTN_3} sage={a._CAN_USE_SAGE_ATTN} flex={a._CAN_USE_FLEX_ATTN} npu={a._CAN_USE_NPU_ATTN} xla={a._CAN_USE_XLA_ATTN} xformers={a._CAN_USE_XFORMERS_ATTN} kernels={a.is_kernels_available()} sdnq=True') # pylint: disable=protected-access
+    log.debug(f'Attention available: sdnq={sdnq_ver} flash={flash} sage={sage} flex={a._CAN_USE_FLEX_ATTN} xformers={xformers} npu={a._CAN_USE_NPU_ATTN} xla={a._CAN_USE_XLA_ATTN} kernels={kernels}') # pylint: disable=protected-access
+
+
 def set_sdpa_params():
     try:
+        global sdpa_original # pylint: disable=global-statement
+        report = sdpa_original is None
         try:
-            global sdpa_original # pylint: disable=global-statement
             if sdpa_original is not None:
                 torch.nn.functional.scaled_dot_product_attention = sdpa_original
             else:
                 sdpa_original = torch.nn.functional.scaled_dot_product_attention
         except Exception as err:
-            log.warning(f'Torch attention: type="sdpa" {err}')
-
+            log.warning(f'Attention: type="SDPA" {err}')
         try:
+            options = {}
             torch.backends.cuda.enable_flash_sdp('Flash' in opts.sdp_options or 'Flash attention' in opts.sdp_options)
             torch.backends.cuda.enable_mem_efficient_sdp('Memory' in opts.sdp_options or 'Memory attention' in opts.sdp_options)
             torch.backends.cuda.enable_math_sdp('Math' in opts.sdp_options or 'Math attention' in opts.sdp_options)
             if hasattr(torch.backends.cuda, "allow_fp16_bf16_reduction_math_sdp"): # only valid for torch >= 2.5
+                options['math'] = 'fp16/bf16'
                 torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
             torch_info.set(attention="sdpa")
-            log.debug(f'Torch attention: type="sdpa" kernels={opts.sdp_options} overrides={opts.sdp_overrides}')
+            log.debug(f'Attention: type="SDPA" kernels={opts.sdp_options} options={options}')
         except Exception as err:
-            log.warning(f'Torch attention: type="sdpa" {err}')
-
-        # Stack hijcaks in reverse order. This gives priority to the last added hijack.
-        # If the last hijack is not compatible, it will use the one before it and so on.
-
-        if 'Dynamic attention' in opts.sdp_overrides:
-            global sdpa_pre_dyanmic_atten # pylint: disable=global-statement
-            sdpa_pre_dyanmic_atten = attention.set_dynamic_attention()
-
-        if 'Flex attention' in opts.sdp_overrides:
-            attention.set_flex_attention()
-
-        if 'Triton Flash attention' in opts.sdp_overrides:
-            attention.set_triton_flash_attention(backend)
-
-        if 'Flash attention' in opts.sdp_overrides:
-            attention.set_ck_flash_attention(backend, device)
-
-        if 'Sage attention' in opts.sdp_overrides:
-            attention.set_sage_attention(backend, device)
-
-        if 'SDNQ attention' in opts.sdp_overrides:
-            attention.set_sdnq_attention()
-
-        from importlib.metadata import version
-        try:
-            flash = version('flash-attn')
-        except Exception:
-            flash = False
-        try:
-            sage = version('sageattention')
-        except Exception:
-            sage = False
-        if flash or sage:
-            log.debug(f'Torch attention installed: flashattn={flash} sageattention={sage}')
-
-        from diffusers.models import attention_dispatch as a
-        log.debug(f'Torch attention available: flash={a._CAN_USE_FLASH_ATTN} flash3={a._CAN_USE_FLASH_ATTN_3} sage={a._CAN_USE_SAGE_ATTN} flex={a._CAN_USE_FLEX_ATTN} npu={a._CAN_USE_NPU_ATTN} xla={a._CAN_USE_XLA_ATTN} xformers={a._CAN_USE_XFORMERS_ATTN} kernels={a.is_kernels_available()} sdnq=True') # pylint: disable=protected-access
-
+            log.warning(f'Attention: type="SDPA" {err}')
+        attention.install_router([opts.cross_attention_optimization], attention.Platform(backend=backend, device=device), sdpa_original)
+        if report:
+            report_attention()
     except Exception as e:
         log.warning(f'Torch SDPA: {e}')
 
@@ -685,6 +684,36 @@ def without_autocast(disable=False):
         return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
     else:
         return torch.autocast("cpu", enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
+
+
+class NullStream: # pylint: disable=too-few-public-methods
+    """Stand-in for a device stream on backends that do not expose one: runs everything synchronously."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def synchronize(self):
+        pass
+
+
+def create_stream(target: torch.device | None = None):
+    """Create a stream on the active device so work can run off the default stream.
+    Uses the accelerator-agnostic torch.Stream when available, the cuda/xpu stream api on older torch,
+    and a no-op stream on backends without stream support, so callers never have to branch."""
+    target = target if target is not None else device
+    if hasattr(torch, 'Stream'): # torch >= 2.5
+        try:
+            return torch.Stream(device=target)
+        except Exception:
+            return NullStream()
+    if backend in {'cuda', 'rocm', 'zluda'}:
+        return torch.cuda.Stream(device=target)
+    if backend == 'ipex':
+        return torch.xpu.Stream(device=target)
+    return NullStream()
 
 
 class NansException(Exception):

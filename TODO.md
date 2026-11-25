@@ -1,45 +1,31 @@
 # TODO
 
-## Short-term
+## Issues
 
-- LoRA: merge new handler, @CalamitousFelicitousness
-- Attn: merge refactor, @CalamitousFelicitousness
-- MiniMax LoRA: native loader for MiniMax-H3: fl2va, ref2va, pruned
-- MiniMax TAESD: <https://github.com/madebyollin/taehv>
-- MiniMax: Create pre-quant for MiniMax-H3-Turbo
-- Benchmark tool productize: @CalamitousFelicitousness
-- Inpaint: https://discord.com/channels/1101998836328697867/1130536562422186044/1506850651035144322, @vladmandic
-- Control tab verify overrides handling, @vladmandic
-- LTX: Create pre-quant for LTX-2.5
+None
 
 ## Features
 
-### Assigned
-
-- Object clear remover for Kanvas: [Object clear](https://huggingface.co/jixin0101/ObjectClear), @vladmandic
-- OpenAI API interface for image generation, @vladmandic
-- Lightweight scheduler/queue manager, @vladmandic
-- Integrate natural language image search: [ImageDB](https://github.com/vladmandic/imagedb), @vladmandic
-- Support cloud providers, @CalamitousFelicitousness
-
 ### Roadmap
 
-- Video upscaling: LTX-Upscaler
-- Video capabilities to processing tab, add RIFE, upscaling (once available)
-- Distraction-free UI mode with prompt-only, chat-based interface
-- Revisit transformer caching for modular pipelines
-- Revisit guidance for modular pipelines
-- Implement modular for some image models
-- Video models: support finetunes
+- OpenAI API interface for image generation, @vladmandic
+- Integrate natural language image search: [ImageDB](https://github.com/vladmandic/imagedb), @vladmandic
+- Support cloud providers, @CalamitousFelicitousness
+- Automated testing and integrate models repo, @CalamitousFelicitousness
+- Video: unify execution path for ui and api
+- Video: support finetunes
+- Video: use Networks/Reference instead of custom, @vladmandic
+- Video: implement LTX2DFRPipeline
+- Video: upscaling LTX-Upscaler
+- Video: upscaling [MiniMax-Upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)
+- Video: capabilities to processing tab, add RIFE, upscaling (once available)
+- UI distraction-free mode with prompt-only, chat-based interface
+- UI Lite vs Expert mode, @vladmandic
+- Remove obsolete code:  `olive-ai`, @vladmandic
 - Incorporate [prompting guides](https://github.com/CalamitousFelicitousness/ai-prompting-guides)
-- Video models: use Networks/Reference instead of custom
-- UI Lite vs Expert mode
-- Expand custom VAE support
-- Remove obsolete code:  `olive-ai`
 
 ### OnHold
 
-- [nVidia-VFX](https://pypi.org/project/nvidia-vfx/): not compatible with latest nVidia drivers
 - [QuantFunc](https://huggingface.co/QuantFunc/Klein-9B-Series): once its released as sdk
 - LoRA add OMI format support for SD35/FLUX.1
 - Remote Text-Encoder support, sidelined for the moment
@@ -51,27 +37,11 @@
 - Unify *huggingface* and *diffusers* model folders
 - JSON image metadata
 
-### Modular
-
-*Pending finalization of modular pipelines implementation and development of compatibility layer*
-
-- Switch to modular pipelines
-- Feature: Transformers unified cache handler
-- Refactor: [Modular pipelines and guiders](https://github.com/huggingface/diffusers/issues/11915)
-- [MagCache](https://github.com/huggingface/diffusers/pull/12744)
-- [SmoothCache](https://github.com/huggingface/diffusers/issues/11135)
-- [STG](https://github.com/huggingface/diffusers/blob/main/examples/community/README.md#spatiotemporal-skip-guidance)
-- [TextKVCache](https://huggingface.co/NucleusAI/Nucleus-Image#quick-start), @vladmandic
-
 ## New models / Pipelines
-
-TODO: Investigate which models are diffusers-compatible and prioritize!
 
 ### Image
 
-- [nVidia Cosmos-Predict-2.5](https://huggingface.co/nvidia/Cosmos-Predict2.5-2B) (in diffusers)
-- [nVidia Cosmos-Transfer-2.5](https://huggingface.co/nvidia/Cosmos-Transfer2.5-2B) (in diffusers)
-- [Tencent HY-WU](https://huggingface.co/tencent/HY-WU) (transformers-compatible)
+None
 
 ### Video
 

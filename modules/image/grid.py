@@ -65,6 +65,10 @@ def get_grid_size(imgs: list, batch_size=1, rows: int | None = None, cols: int |
     return rows_int, cols_int
 
 
+def has_alpha(image: Image.Image) -> bool:
+    return image.mode in ('RGBA', 'LA', 'PA') or (image.mode == 'P' and 'transparency' in image.info)
+
+
 def image_grid(imgs: list, batch_size=1, rows: int | None = None, cols: int | None = None):
     if isinstance(imgs, Image.Image):
         return imgs
@@ -76,10 +80,12 @@ def image_grid(imgs: list, batch_size=1, rows: int | None = None, cols: int | No
         params = script_callbacks.ImageGridLoopParams(imgs, cols, rows)
         script_callbacks.image_grid_callback(params)
         w, h = max(i.width for i in imgs if i is not None), max(i.height for i in imgs if i is not None)
-        grid = Image.new('RGB', size=(params.cols * w, params.rows * h), color=shared.opts.grid_background)
+        mode = 'RGBA' if any(has_alpha(i) for i in params.imgs if i is not None) else 'RGB' # paste onto an RGB canvas drops alpha
+        grid = Image.new(mode, size=(params.cols * w, params.rows * h), color=shared.opts.grid_background)
         for i, img in enumerate(params.imgs):
             if img is not None:
                 grid.paste(img, box=(i % params.cols * w, i // params.cols * h))
+        grid.is_grid = True # flag image as grid
         return grid
     except Exception as e:
         log.error(f'Grid: images={imgs} {e}')
@@ -145,15 +151,15 @@ class GridAnnotation:
 
 def get_font(fontsize: float):
     try:
-        return ImageFont.truetype(shared.opts.font or os.path.join(script_path, "ui", "fonts", "notosans-nerdfont-regular.ttf"), fontsize)
+        return ImageFont.truetype(shared.opts.font or os.path.join(script_path, "ui", "css", "ubuntu-nerdfont.ttf"), fontsize)
     except Exception:
-        return ImageFont.truetype(os.path.join(script_path, "ui", "fonts", "notosans-nerdfont-regular.ttf"), fontsize)
+        return ImageFont.truetype(os.path.join(script_path, "ui", "css", "ubuntu-nerdfont.ttf"), fontsize)
 
 
 def draw_grid_annotations(im: Image.Image, width: int, height: int, x_texts: list[list[GridAnnotation]], y_texts: list[list[GridAnnotation]], margin=0, title: list[GridAnnotation] | None = None):
     def wrap(drawing: ImageDraw.ImageDraw, text, font, line_length):
         lines = ['']
-        for word in text.split():
+        for word in text.split('/\\'):
             line = f'{lines[-1]} {word}'.strip()
             if drawing.textlength(line, font=font) <= line_length:
                 lines[-1] = line
@@ -161,7 +167,7 @@ def draw_grid_annotations(im: Image.Image, width: int, height: int, x_texts: lis
                 lines.append(word)
         return lines
 
-    def draw_texts(drawing: ImageDraw.ImageDraw, draw_x: float, draw_y: float, lines, initial_fnt: ImageFont.FreeTypeFont, initial_fontsize: int):
+    def draw_texts(drawing: ImageDraw.ImageDraw, draw_x: float, draw_y: float, lines: list[GridAnnotation], initial_fnt: ImageFont.FreeTypeFont, initial_fontsize: int):
         for line in lines:
             font = initial_fnt
             fontsize = initial_fontsize
@@ -203,7 +209,7 @@ def draw_grid_annotations(im: Image.Image, width: int, height: int, x_texts: lis
     if title:
         title_text_heights = [sum([line.size[1] + line_spacing for line in lines]) - line_spacing for lines in title_texts]
         title_pad = 0 if sum(title_text_heights) == 0 else max(title_text_heights) + line_spacing * 2
-    result = Image.new("RGB", (im.width + pad_left + margin * (cols-1), im.height + pad_top + title_pad + margin * (rows-1)), shared.opts.grid_background)
+    result = Image.new("RGBA" if has_alpha(im) else "RGB", (im.width + pad_left + margin * (cols-1), im.height + pad_top + title_pad + margin * (rows-1)), shared.opts.grid_background)
     for row in range(rows):
         for col in range(cols):
             cell = im.crop((width * col, height * row, width * (col+1), height * (row+1)))

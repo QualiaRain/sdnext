@@ -1,6 +1,6 @@
 import os
 import torch
-from modules import shared, devices, errors, sd_models, sd_offload, model_quant
+from modules import shared, devices, errors, sd_models, sd_offload, model_quant, hashes
 from modules.logger import log
 from pipelines.generic_util import get_loader
 from pipelines.generic_map import transformers_map
@@ -11,7 +11,7 @@ debug = os.environ.get('SD_LOAD_DEBUG', None) is not None
 
 def load_transformer(
         repo_id,
-        cls_name,
+        cls_name=None,
         load_config=None,
         subfolder="transformer",
         allow_quant=True,
@@ -24,7 +24,6 @@ def load_transformer(
         override_slot='primary',
         trust_remote_code=False,
         **kwargs):
-
     """Load a DiT transformer from the base repo, or from a user-selected
     single file when the slot's UNET override dropdown is set.
 
@@ -48,6 +47,10 @@ def load_transformer(
         modules_to_not_convert = []
     if modules_dtype_dict is None:
         modules_dtype_dict = {}
+    if cls_name is None:
+        from diffusers import AutoModel
+        cls_name = AutoModel
+    offline_args = {'local_files_only': True} if shared.opts.offline_mode else {}
     jobid = shared.state.begin('Load DiT')
     try:
         load_args, quant_args = model_quant.get_dit_args(load_config, module='Model', device_map=True, allow_quant=allow_quant, modules_to_not_convert=modules_to_not_convert, modules_dtype_dict=modules_dtype_dict)
@@ -61,7 +64,7 @@ def load_transformer(
         def load_from_repo():
             nonlocal quant_args
             log.debug(f'Load model: transformer="{repo_id}" cls={cls_name.__name__} subfolder={subfolder} loader={get_loader("diffusers")} args={load_args}')
-            if 'sdnq-' in repo_id.lower():
+            if 'sdnq' in repo_id.lower(): # likely a pre-quant model
                 quant_args = {}
             if dtype is not None:
                 load_args['torch_dtype'] = dtype
@@ -73,13 +76,15 @@ def load_transformer(
                 load_args['use_safetensors'] = True
             if trust_remote_code:
                 load_args['trust_remote_code'] = True
-            return cls_name.from_pretrained(
+            load_kwargs = {**load_args, **quant_args, **offline_args, **kwargs}
+            module = cls_name.from_pretrained(
                 repo_id,
                 cache_dir=shared.opts.hfcache_dir,
-                **load_args,
-                **quant_args,
-                **kwargs,
+                **load_kwargs,
             )
+            if cls_name.__name__ == 'AutoModel':
+                log.debug(f'Load model: transformer="{repo_id}" cls={module.__class__.__name__}')
+            return module
 
         local_file = None
         override_name = None
@@ -119,7 +124,7 @@ def load_transformer(
             # transformer = model_quant.do_post_load_quant(transformer, allow=quant_type is not None)
 
         # 2. load safetensors with native loader if spec is available
-        elif local_file is not None and local_file.lower().endswith('.safetensors') and native_spec is not None:
+        elif (local_file is not None) and local_file.lower().endswith('.safetensors') and (native_spec is not None):
             from pipelines import native_transformer
             log.debug(f'Load model: transformer="{local_file}" cls={cls_name.__name__} quant="{quant_type}" loader=native args={load_args}')
             try:
@@ -145,35 +150,36 @@ def load_transformer(
                     transformer = load_from_repo()
 
         # 3. load safetensors with diffusers loader
-        elif local_file is not None and local_file.lower().endswith('.safetensors'):
+        elif (local_file is not None) and local_file.lower().endswith('.safetensors'):
             if dtype is not None:
                 load_args['torch_dtype'] = dtype
             load_args.pop('device_map', None) # single-file uses different syntax
             loader = cls_name.from_single_file if hasattr(cls_name, 'from_single_file') else cls_name.from_pretrained
             log.debug(f'Load model: transformer="{local_file}" cls={cls_name.__name__} quant="{quant_type}" loader={get_loader("diffusers")} method={loader.__name__} args={load_args}')
+            load_kwargs = {**load_args, **quant_args, **offline_args, **kwargs}
             transformer = loader(
                 local_file,
                 cache_dir=shared.opts.hfcache_dir,
-                **load_args,
-                **quant_args,
-                **kwargs,
+                **load_kwargs,
             )
 
-        # 4. default loading from diffusers repo (also the fallback when an
-        # incompatible override is dropped above)
+        # 4. default loading from diffusers repo (also the fallback when an incompatible override is dropped above)
         else:
             transformer = load_from_repo()
 
-        # mark the dropdown selection as loaded so the slot's onchange callback
-        # does not force a redundant full reload for an already-consumed override
-        if transformer is not None and override_name is not None and getattr(shared.opts, override_opt, None) == override_name:
+        # mark the dropdown selection as loaded so the slot's onchange callback, does not force a redundant full reload for an already-consumed override
+        if (transformer is not None) and (override_name is not None) and getattr(shared.opts, override_opt, None) == override_name:
             setattr(sd_unet, tracker_attr, override_name)
+            try:
+                hashes.sha256(local_file, f'unet/{override_name}')
+            except Exception as e:
+                log.warning(f'Load model: transformer hash failed: name="{override_name}" {e}')
 
         sd_models.allow_post_quant = False # we already handled it
         if shared.opts.diffusers_offload_mode != 'none' and transformer is not None:
             sd_models.move_model(transformer, devices.cpu)
 
-        if transformer is not None and not hasattr(transformer, 'quantization_config'): # attach quantization_config
+        if (transformer is not None) and not hasattr(transformer, 'quantization_config'): # attach quantization_config
             if hasattr(transformer, 'config') and hasattr(transformer.config, 'quantization_config'):
                 transformer.quantization_config = transformer.config.quantization_config
             elif (quant_type is not None) and (quant_args.get('quantization_config', None) is not None):
@@ -193,8 +199,7 @@ def load_transformer(
         log.debug(f'Load model: transformer="{repo_id}" quant="{quant_type}" size={module_size:.3f} params={param_num:.3f} memory={module_memory}')
 
     try:
-        # quantized models legitimately report the storage dtype (e.g. fp8 comfy_quant
-        # adopted via SDNQ); the compute dtype lives in the dequantizers, not the params
+        # quantized models legitimately report the storage dtype (e.g. fp8 comfy_quant adopted via SDNQ); the compute dtype lives in the dequantizers, not the params
         if getattr(transformer, 'quantization_config', None) is None:
             actual_dtype = transformer.dtype
             if isinstance(actual_dtype, torch.dtype) and isinstance(dtype, torch.dtype) and actual_dtype != dtype:

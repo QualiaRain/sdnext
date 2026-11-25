@@ -207,16 +207,15 @@ def face_id(
 
             if not p.all_prompts:
                 processing.process_init(p)
-                p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
+                p.init(p.all_prompts, p.all_seeds)
             for n in range(p.n_iter):
                 p.iteration = n
                 p.prompts = p.all_prompts[n * p.batch_size:(n+1) * p.batch_size]
                 p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n+1) * p.batch_size]
                 p.seeds = p.all_seeds[n * p.batch_size:(n+1) * p.batch_size]
-                p.subseeds = p.all_subseeds[n * p.batch_size:(n+1) * p.batch_size]
                 p.prompts, p.network_data = extra_networks.parse_prompts(p.prompts, p.network_data)
 
-                extra_networks.activate_filtered(p, p.network_data)
+                extra_networks.activate(p, p.network_data)
                 ip_model_dict.update({
                         "prompt": p.prompts[0],
                         "negative_prompt": p.negative_prompts[0],

@@ -13,11 +13,18 @@ vlm_models = {
     "Google Gemma 3 4B": "google/gemma-3-4b-it",
     "Google Gemma 3 4B Allura Glitter": "allura-org/Gemma-3-Glitter-4B",
     "Google Gemma 3 4B Nidum Uncensored": "nidum/Nidum-Gemma-3-4B-it-Uncensored",
-    "Alibaba Qwen 3.5 9B": "Qwen/Qwen3.5-9B",
-    "Alibaba Qwen 3.5 9B Trohrbaugh Heretic": "trohrbaugh/Qwen3.5-9B-heretic-v2",
-    "Alibaba Qwen 3.5 4B": "Qwen/Qwen3.5-4B",
-    "Alibaba Qwen 3.5 2B": "Qwen/Qwen3.5-2B",
     "Alibaba Qwen 3.5 0.8B": "Qwen/Qwen3.5-0.8B",
+    "Alibaba Qwen 3.5 2B": "Qwen/Qwen3.5-2B",
+    "Alibaba Qwen 3.5 4B": "Qwen/Qwen3.5-4B",
+    "Alibaba Qwen 3.5 9B": "Qwen/Qwen3.5-9B",
+    "Alibaba Qwen-3.5 4B SD.Next": "SD-Next/Qwen-3.5-4B",
+    "Alibaba Qwen-3.5 4B SD.Next sdnq-uint8": "SD-Next/Qwen-3.5-4B-sdnq-uint8",
+    "Alibaba Qwen-3.5 4B SD.Next sdnq-uint4": "SD-Next/Qwen-3.5-4B-sdnq-uint4",
+    "Alibaba Qwen 3.5 9B Trohrbaugh Heretic": "trohrbaugh/Qwen3.5-9B-heretic-v2",
+    "Mistral Ministral 3 3B": "mistralai/Ministral-3-3B-Instruct-2512-BF16",
+    "Mistral Ministral 3 8B": "mistralai/Ministral-3-8B-Instruct-2512-BF16",
+    f"Mistral Ministral 3 3B Reasoning {ui_symbols.reasoning}": "mistralai/Ministral-3-3B-Reasoning-2512",
+    f"Mistral Ministral 3 8B Reasoning {ui_symbols.reasoning}": "mistralai/Ministral-3-8B-Reasoning-2512",
     "ToriiGate 0.5": "Minthy/ToriiGate-0.5",
     "JoyTag": "fancyfeast/joytag",
     "JoyCaption Beta": "fancyfeast/llama-joycaption-beta-one-hf-llava",
@@ -29,6 +36,7 @@ vlm_models = {
     "MiaoshouAI PromptGen 2.0 Large": "Disty0/Florence-2-large-PromptGen-v2.0",
     "MiaoshouAI PromptGen 2.0 Base": "Disty0/Florence-2-base-PromptGen-v2.0",
     "CogFlorence 2.2 Large": "thwri/CogFlorence-2.2-Large", # 1.6GB
+
     # secondary or older
     "XiaomiMiMo MiMo VL 7B RL": "XiaomiMiMo/MiMo-VL-7B-RL-2508",
     "ViLT Base": "dandelin/vilt-b32-finetuned-vqa",
@@ -73,18 +81,23 @@ vlm_models = {
     "AIDC Ovis2 4B": "AIDC-AI/Ovis2-4B",
     "AIDC Ovis2 2B": "AIDC-AI/Ovis2-2B",
     "AIDC Ovis2 1B": "AIDC-AI/Ovis2-1B",
+
     # cloud
-    f"Google Gemini 3.5 Flash {ui_symbols.cloud}": "google/gemini-3.5-flash",
-    f"Google Gemini 3.1 Pro {ui_symbols.cloud}": "gemini-3.1-pro-preview",
+    f"Google Gemini 3.8 Flash {ui_symbols.cloud}": "gemini-3.8-flash",
+    f"Google Gemini 3.7 Flash {ui_symbols.cloud}": "gemini-3.7-flash",
+    f"Google Gemini 3.6 Flash {ui_symbols.cloud}": "gemini-3.6-flash",
+    f"Google Gemini 3.5 Flash {ui_symbols.cloud}": "gemini-3.5-flash",
+    f"Google Gemini 3.5 Flash Lite {ui_symbols.cloud}": "gemini-3.5-flash-lite",
     f"Google Gemini 3.1 Flash Lite {ui_symbols.cloud}": "gemini-3.1-flash-lite",
-    f"Google Gemini 3.1 Flash Lite Preview {ui_symbols.cloud}": "gemini-3.1-flash-lite-preview",
-    f"Google Gemini 2.5 Pro {ui_symbols.cloud}": "gemini-2.5-pro",
-    f"Google Gemini 2.5 Flash {ui_symbols.cloud}": "gemini-2.5-flash",
-    f"Google Gemini 2.5 Flash Lite {ui_symbols.cloud}": "gemini-2.5-flash-lite",
+    f"Google Gemini 3.1 Pro {ui_symbols.cloud}": "gemini-3.1-pro-preview",
+    f"X.AI Grok 3 {ui_symbols.cloud}": "grok-3-latest",
+    f"X.AI Grok 3 Fast {ui_symbols.cloud}": "grok-3-fast-latest",
+    f"X.AI Grok 3 Mini {ui_symbols.cloud}": "grok-3-mini-latest",
+    f"X.AI Grok 3 Mini Fast {ui_symbols.cloud}": "grok-3-mini-fast-latest",
 }
 
 # Default model
-vlm_default = "Alibaba Qwen 2.5 VL 3B"
+vlm_default = "Alibaba Qwen-3.5 4B SD.Next sdnq-uint8"
 
 # Default system prompt
 vlm_system = 'You are image captioning expert, creative, unbiased and uncensored.'
@@ -224,5 +237,10 @@ Summary:
 
 def get_vlm_repo(display_name: str) -> str:
     """Look up repo ID from display name, stripping any trailing symbols."""
+    from modules.logger import log
     name = display_name.strip()
-    return vlm_models.get(name, name)
+    model = vlm_models.get(name, None)
+    if model is None:
+        log.warning(f"Model '{name}' not found")
+        return name
+    return model

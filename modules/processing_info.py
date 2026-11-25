@@ -1,6 +1,6 @@
 import os
 from installer import git_commit
-from modules import shared, sd_samplers_common, sd_vae
+from modules import shared, sd_samplers_common, sd_vae, hashes
 from modules.logger import log
 from modules.processing_class import StableDiffusionProcessing
 from modules.infotext import quote
@@ -15,7 +15,7 @@ def get_last_args():
     return args, infotext
 
 
-def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=None, all_subseeds=None, comments=None, iteration=0, position_in_batch=0, index=None, all_negative_prompts=None, grid=None):
+def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=None, comments=None, iteration=0, position_in_batch=0, index=None, all_negative_prompts=None, grid=None):
     global args, infotext # pylint: disable=global-statement
     if p is None:
         log.warning('Processing info: no data')
@@ -32,14 +32,10 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         all_negative_prompts = p.all_negative_prompts or [p.negative_prompt]
     if all_seeds is None:
         all_seeds = p.all_seeds or [p.seed]
-    if all_subseeds is None:
-        all_subseeds = p.all_subseeds or [p.subseed]
     while len(all_prompts) <= index:
         all_prompts.append(p.prompt)
     while len(all_seeds) <= index:
         all_seeds.append(int(p.seed))
-    while len(all_subseeds) <= index:
-        all_subseeds.append(int(p.subseed))
     while len(all_negative_prompts) <= index:
         all_negative_prompts.append(p.negative_prompt)
     if p.all_templates is not None:
@@ -58,10 +54,11 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         "Sampler": p.sampler_name if p.sampler_name != 'None' else 'Default',
         "Scheduler": shared.sd_model.scheduler.__class__.__name__ if getattr(shared.sd_model, 'scheduler', None) is not None else None,
         "Seed": all_seeds[index],
-        "Seed resize from": None if p.seed_resize_from_w <= 0 or p.seed_resize_from_h <= 0 else f"{p.seed_resize_from_w}x{p.seed_resize_from_h}",
+        "CFG name": p.cfg_name if p.cfg_name != 'Default' else None,
         "CFG scale": p.cfg_scale if p.cfg_scale > -1 else None,
         "CFG rescale": p.cfg_rescale if p.cfg_rescale > -1 else None,
-        "CFG end": p.cfg_end if p.cfg_end < 1.0 else None,
+        "CFG start": p.cfg_start if p.cfg_start > 0.0 else None,
+        "CFG stop": p.cfg_stop if p.cfg_stop < 1.0 else None,
         "CFG true": p.cfg_true if p.cfg_true > 0 else None,
         "CFG adaptive": p.cfg_adaptive if p.cfg_adaptive != 0.5 else None,
         "CLiP-skip": p.clip_skip if p.clip_skip > 1 else None,
@@ -78,18 +75,22 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         "UNet": None if (shared.opts.sd_unet is None or shared.opts.sd_unet == 'Default') else shared.opts.sd_unet,
         "Operations": '; '.join(ops).replace('"', '') if len(p.ops) > 0 else 'none',
     }
-    if shared.opts.add_model_name_to_info:
-        if getattr(shared.sd_model, 'sd_checkpoint_info', None) is not None:
-            args["Model"] = shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')
-    if shared.opts.add_model_hash_to_info:
-        if getattr(p, 'sd_model_hash', None) is not None:
-            args["Model hash"] = p.sd_model_hash
-        elif getattr(shared.sd_model, 'sd_model_hash', None) is not None:
+    if getattr(shared.sd_model, 'sd_checkpoint_info', None) is not None:
+        args["Model"] = shared.sd_model.sd_checkpoint_info.model_name.replace(',', '').replace(':', '')
+
+    if shared.opts.add_model_hash:
+        if getattr(shared.sd_model, 'sd_model_hash', None) is not None:
             args["Model hash"] = shared.sd_model.sd_model_hash
+        if 'UNet' in args:
+            unet_hash = hashes.sha256_from_cache(shared.opts.sd_unet, f"unet/{shared.opts.sd_unet}")
+            args["UNet hash"] = unet_hash[0:10] if unet_hash else None
+
     if p.vae_type == 'Full':
-        args["VAE"] = (None if not shared.opts.add_model_name_to_info or sd_vae.loaded_vae_file is None else os.path.splitext(os.path.basename(sd_vae.loaded_vae_file))[0])
+        args["VAE"] = (None if sd_vae.loaded_vae_file is None else os.path.splitext(os.path.basename(sd_vae.loaded_vae_file))[0])
     elif p.vae_type == 'Tiny':
         args["VAE"] = 'TAESD'
+    elif p.vae_type == 'Micro':
+        args["VAE"] = 'Micro'
     elif p.vae_type == 'REPA-E':
         args["VAE"] = 'REPA-E'
     elif p.vae_type == 'Remote':
@@ -98,9 +99,6 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         args['Index'] = f'{p.iteration + 1}x{index + 1}'
     if grid is not None:
         args['Grid'] = grid
-    if 'txt2img' in p.ops:
-        args["Variation seed"] = all_subseeds[index] if p.subseed_strength > 0 else None
-        args["Variation strength"] = p.subseed_strength if p.subseed_strength > 0 else None
     if 'hires' in p.ops or 'upscale' in p.ops:
         is_resize = p.hr_resize_mode > 0 and (p.hr_upscaler != 'None' or p.hr_resize_mode == 5)
         is_fixed = p.hr_resize_x > 0 or p.hr_resize_y > 0
@@ -132,7 +130,6 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         args["Init image size"] = f"{getattr(p, 'init_img_width', 0)}x{getattr(p, 'init_img_height', 0)}"
         args["Init image hash"] = getattr(p, 'init_img_hash', None)
         args['Image CFG scale'] = p.cfg_image if (p.cfg_image is not None and p.cfg_image > -1) else None
-        args["Mask weight"] = getattr(p, "inpainting_mask_weight", shared.opts.inpainting_mask_weight) if p.is_using_inpainting_conditioning else None
         args["Denoising strength"] = getattr(p, 'denoising_strength', None)
         if args["Size"] != args["Init image size"]:
             args['Resize scale'] = float(getattr(p, 'scale_by', None)) if getattr(p, 'scale_by', None) != 1 else None
@@ -183,14 +180,13 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         args['ToMe'] = _tome if _tome != 0 else None
     elif _token_method == 'ToDo':
         args['ToDo'] = _todo if _todo != 0 else None
-    if hasattr(shared.sd_model, 'embedding_db') and len(shared.sd_model.embedding_db.embeddings_used) > 0: # register used embeddings
+    if hasattr(shared.sd_model, 'embedding_db') and (shared.sd_model.embedding_db is not None) and len(shared.sd_model.embedding_db.embeddings_used) > 0: # register used embeddings
         args['Embeddings'] = ', '.join(shared.sd_model.embedding_db.embeddings_used)
 
     # samplers
     if getattr(p, 'sampler_name', None) is not None and p.sampler_name.lower() != 'default':
         _eta_delta = get_opt('eta_noise_seed_delta')
         args["Sampler eta delta"] = _eta_delta if _eta_delta != 0 and sd_samplers_common.is_sampler_using_eta_noise_seed_delta(p) else None
-        args["Sampler eta multiplier"] = p.initial_noise_multiplier if getattr(p, 'initial_noise_multiplier', 1.0) != 1.0 else None
         args['Sampler timesteps'] = get_opt('schedulers_timesteps') if get_opt('schedulers_timesteps') != shared.opts.data_labels.get('schedulers_timesteps').default else None
         args['Sampler spacing'] = get_opt('schedulers_timestep_spacing') if get_opt('schedulers_timestep_spacing') != shared.opts.data_labels.get('schedulers_timestep_spacing').default else None
         args['Sampler sigma'] = get_opt('schedulers_sigma') if get_opt('schedulers_sigma') != shared.opts.data_labels.get('schedulers_sigma').default else None
@@ -206,11 +202,6 @@ def create_infotext(p: StableDiffusionProcessing, all_prompts=None, all_seeds=No
         args['Sampler shift'] = get_opt('schedulers_shift') if get_opt('schedulers_shift') != shared.opts.data_labels.get('schedulers_shift').default else None
         args['Sampler dynamic shift'] = get_opt('schedulers_dynamic_shift') if get_opt('schedulers_dynamic_shift') != shared.opts.data_labels.get('schedulers_dynamic_shift').default else None
 
-    # model specific
-    if shared.sd_model_type == 'h1':
-        args['LLM'] =  None if shared.opts.model_h1_llama_repo == 'Default' else shared.opts.model_h1_llama_repo
-
-    # args.update(p.extra_generation_params)
     for k, v in p.extra_generation_params.items():
         if isinstance(v, (list, tuple)) and (job_size > index) and (len(v) > 1) and (len(v) == job_size): # likely a per-job param
             args[k] = v[index]

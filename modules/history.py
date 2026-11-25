@@ -3,7 +3,7 @@ TODO: apply metadata, preview, load/save
 """
 
 import sys
-import datetime
+import datetime as dt
 from collections import deque
 import torch
 from modules import shared, devices
@@ -21,7 +21,7 @@ class Item:
     def __init__(self, latent, preview=None, info=None, ops=None, images=None):
         if ops is None:
             ops = []
-        self.ts = datetime.datetime.now().replace(microsecond=0)
+        self.ts = dt.datetime.now().replace(microsecond=0)
         self.name = self.ts.strftime('%Y-%m-%d %H:%M:%S')
         if torch.is_tensor(latent):
             self.latent = latent.detach().clone().to(devices.cpu)
@@ -36,7 +36,7 @@ class Item:
 
     def __str__(self):
         if self.latent is not None:
-            return f'Item(ts="{self.name}" ops={self.ops} latent={self.latent.shape} size={self.size})'
+            return f'Item(ts="{self.name}" ops={self.ops} latent={list(self.latent.shape)} size={self.size})'
         elif self.images is not None:
             return f'Item(ts="{self.name}" ops={self.ops} images={len(self.images) if isinstance(self.images, list) else self.images})'
         else:

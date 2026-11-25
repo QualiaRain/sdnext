@@ -41,6 +41,7 @@ pipelines = {
     'FLUX': getattr(diffusers, 'FluxPipeline', None),
     'FLUX2Klein': getattr(diffusers, 'Flux2KleinPipeline', None),
     'FLUX2': getattr(diffusers, 'Flux2Pipeline', None),
+    'FLUX3': getattr(diffusers, 'Flux3ModularPipeline', None),
     'GLMImage': getattr(diffusers, 'GlmImagePipeline', None),
     'HiDream': getattr(diffusers, 'HiDreamImagePipeline', None),
     'HunyuanDiT': getattr(diffusers, 'HunyuanDiTPipeline', None),
@@ -52,8 +53,8 @@ pipelines = {
     'Kandinsky50': getattr(diffusers, 'Kandinsky5T2IPipeline', None),
     'Kolors': getattr(diffusers, 'KolorsPipeline', None),
     'LongCat': getattr(diffusers, 'LongCatImagePipeline', None),
+    'LuminaNext': getattr(diffusers, 'LuminaPipeline', None),
     'Lumina2': getattr(diffusers, 'Lumina2Pipeline', None),
-    'LuminaNext': getattr(diffusers, 'LuminaText2ImgPipeline', None),
     'NucleusImage': getattr(diffusers, 'NucleusMoEImagePipeline', None),
     'OvisImage': getattr(diffusers, 'OvisImagePipeline', None),
     'OmniGen': getattr(diffusers, 'OmniGenPipeline', None),
@@ -62,6 +63,7 @@ pipelines = {
     'PRXPixel': getattr(diffusers, 'PRXPixelPipeline', None),
     'MiniMaxH3': getattr(diffusers, 'MiniMaxH3ModularPipeline', None),
     'Qwen': getattr(diffusers, 'QwenImagePipeline', None),
+    'Qwen21': getattr(diffusers, 'QwenImage21Pipeline', None),
     'Sana': getattr(diffusers, 'SanaPipeline', None),
     'WanAI': getattr(diffusers, 'WanPipeline', None),
     'ZImage': getattr(diffusers, 'ZImagePipeline', None),
@@ -71,7 +73,7 @@ pipelines = {
     'Anima': OnlinePipeline,
 
     # sdnext custom pipelines are dynamically imported and redefined later
-    'Bria': None,
+    'BriaFibo': None,
     'FLite': None,
     'FLEX': None,
     'HiDreamO1': None,
@@ -92,6 +94,8 @@ pipelines = {
     'Boogu': None,
     'SeFi': None,
     'MageFlow': None,
+    'MingImage': None,
+    'MOSSImage': None,
 }
 logging.getLogger("diffusers").setLevel(logging_level)
 logging.getLogger("diffusers.modular_pipelines").setLevel(logging_level)
@@ -106,10 +110,6 @@ def sd_vae_items():
     import modules.sd_vae
     return ["Automatic", "Default"] + list(modules.sd_vae.vae_dict)
 
-
-def sd_taesd_items():
-    import modules.vae.sd_vae_taesd
-    return list(modules.vae.sd_vae_taesd.TAESD_MODELS.keys()) + list(modules.vae.sd_vae_taesd.CQYAN_MODELS.keys())
 
 def refresh_vae_list():
     import modules.sd_vae
@@ -139,13 +139,16 @@ def refresh_te_list():
 
 def list_crossattention():
     return [
-        "Disabled",
-        "Scaled-Dot-Product",
-        "xFormers",
-        "Batch matrix-matrix",
-        "Dynamic Attention BMM"
+        'Default',
+        'Scaled-Dot-Product',
+        'SDNQ attention',
+        'xFormers',
+        'Flex attention',
+        'Flash attention',
+        'Sage attention',
+        'Dynamic attention',
+        'Triton AMD Flash attention'
     ]
-
 
 def get_pipelines():
     from modules.logger import log

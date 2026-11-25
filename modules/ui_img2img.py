@@ -43,7 +43,11 @@ def create_ui():
     modules.scripts_manager.scripts_current = modules.scripts_manager.scripts_img2img
     modules.scripts_manager.scripts_img2img.initialize_scripts(is_img2img=True, is_control=False)
     with gr.Blocks(analytics_enabled=False) as _img2img_interface:
-        img2img_prompt, img2img_prompt_styles, img2img_negative_prompt, img2img_submit, img2img_reprocess, img2img_paste, img2img_extra_networks_button, img2img_token_counter, img2img_token_button, img2img_negative_token_counter, img2img_negative_token_button = ui_sections.create_toprow(is_img2img=True, id_part="img2img")
+        img2img_prompt, img2img_prompt_styles, img2img_negative_prompt, img2img_submit, img2img_reprocess, img2img_paste, img2img_extra_networks_button, img2img_token_counter, img2img_token_button, img2img_negative_token_counter, img2img_negative_token_button, _img2img_schedule = ui_sections.create_toprow(
+            is_img2img=True,
+            id_part="img2img",
+            schedule_visible=False,
+        )
         img2img_prompt_img = gr.File(label="", elem_id="img2img_prompt_image", file_count="single", type="binary", visible=False)
         img2img_prompt_img.change(fn=modules.images.image_data, inputs=[img2img_prompt_img], outputs=[img2img_prompt, img2img_prompt_img])
 
@@ -130,14 +134,14 @@ def create_ui():
                         ui_sections.create_sampler_options('img2img')
                     resize_mode, resize_name, resize_context, width, height, scale_by, selected_scale_tab = ui_sections.create_resize_inputs('img2img', [img_init, img_sketch], latent=True, non_zero=False)
                     batch_count, batch_size = ui_sections.create_batch_inputs('img2img', accordion=True)
-                    seed, reuse_seed, subseed, reuse_subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w = ui_sections.create_seed_inputs('img2img')
+                    seed, reuse_seed = ui_sections.create_seed_inputs('img2img')
 
                     with gr.Accordion(open=False, label="Denoise", elem_classes=["small-accordion"], elem_id="img2img_denoise_group"):
                         with gr.Row():
                             denoising_strength = gr.Slider(minimum=0.00, maximum=0.99, step=0.01, label='Denoising strength', value=0.30, elem_id="img2img_denoising_strength")
                             refiner_start = gr.Slider(minimum=0.0, maximum=1.0, step=0.05, label='Denoise start', value=0.0, elem_id="img2img_refiner_start")
 
-                    guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop, cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end = ui_guidance.create_guidance_inputs('img2img')
+                    cfg_name, cfg_scale, cfg_image, cfg_rescale, cfg_start, cfg_stop, cfg_true, cfg_adaptive = ui_guidance.create_guidance_inputs('img2img')
                     vae_type, tiling, hidiffusion, clip_skip = ui_sections.create_advanced_inputs('img2img')
                     grading_brightness, grading_contrast, grading_saturation, grading_hue, grading_gamma, grading_sharpness, grading_color_temp, grading_shadows, grading_midtones, grading_highlights, grading_clahe_clip, grading_clahe_grid, grading_shadows_tint, grading_highlights_tint, grading_split_tone_balance, grading_vignette, grading_grain, grading_lut_file, grading_lut_strength = ui_sections.create_color_inputs('img2img')
                     hdr_mode, hdr_brightness, hdr_color, hdr_sharpen, hdr_clamp, hdr_boundary, hdr_threshold, hdr_maximize, hdr_max_center, hdr_max_boundary, hdr_color_picker, hdr_tint_ratio, hdr_apply_hires = ui_sections.create_latent_inputs('img2img')
@@ -167,8 +171,7 @@ def create_ui():
 
             img2img_gallery, img2img_generation_info, img2img_html_info, _img2img_html_info_formatted, img2img_html_log = ui_common.create_output_panel("img2img", prompt=img2img_prompt)
 
-            ui_common.reuse_seed(seed, reuse_seed, subseed=False)
-            ui_common.reuse_seed(subseed, reuse_subseed, subseed=True)
+            ui_common.reuse_seed(seed, reuse_seed)
 
             dummy_component1 = gr.Textbox(visible=False, value='dummy')
             dummy_component2 = gr.Number(visible=False, value=0)
@@ -183,12 +186,11 @@ def create_ui():
                 vae_type, tiling, hidiffusion,
                 detailer_enabled, detailer_prompt, detailer_negative, detailer_steps, detailer_strength, detailer_resolution, detailer_classes,
                 batch_count, batch_size,
-                guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop,
-                cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end,
+                cfg_name, cfg_scale, cfg_image, cfg_rescale, cfg_start, cfg_stop, cfg_true, cfg_adaptive,
                 refiner_start,
                 clip_skip,
                 denoising_strength,
-                seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w,
+                seed,
                 selected_scale_tab,
                 height, width,
                 scale_by,
@@ -264,21 +266,8 @@ def create_ui():
                 (batch_size, "Batch-2"),
                 # seed
                 (seed, "Seed"),
-                (subseed, "Variation seed"),
-                (subseed_strength, "Variation strength"),
-                # guidance
-                (guidance_name, "Guidance"),
-                (guidance_scale, "Guidance scale"),
-                (guidance_rescale, "Guidance rescale"),
-                (guidance_start, "Guidance start"),
-                (guidance_stop, "Guidance stop"),
                 # advanced
-                (cfg_scale, "CFG scale"),
-                (cfg_end, "CFG end"),
-                (cfg_image, "Image CFG scale"),
-                (cfg_image, "Hires CFG scale"),
                 (clip_skip, "CLiP-skip"),
-                (cfg_rescale, "CFG rescale"),
                 (vae_type, "VAE type"),
                 (tiling, "Tiling"),
                 (hidiffusion, "HiDiffusion"),
@@ -307,9 +296,17 @@ def create_ui():
                 # refiner
                 (refiner_start, "Refiner start"),
                 (refiner_steps, "Refiner steps"),
-                (refiner_prompt, "refiner prompt"),
+                (refiner_prompt, "Refiner prompt"),
                 (refiner_negative, "Refiner negative"),
-                # pag
+                # guidance
+                (cfg_name, "CFG name"),
+                (cfg_scale, "CFG scale"),
+                (cfg_image, "CFG image"),
+                (cfg_image, "Image CFG scale"),
+                (cfg_image, "Hires CFG scale"),
+                (cfg_rescale, "CFG rescale"),
+                (cfg_start, "CFG start"),
+                (cfg_stop, "CFG stop"),
                 (cfg_true, "CFG true"),
                 (cfg_adaptive, "CFG adaptive"),
                 # inpaint
@@ -319,8 +316,6 @@ def create_ui():
                 (inpainting_mask_invert, "Mask invert"),
                 (inpaint_full_res, "Mask area"),
                 # hidden
-                (seed_resize_from_w, "Seed resize from-1"),
-                (seed_resize_from_h, "Seed resize from-2"),
                 *modules.scripts_manager.scripts_img2img.infotext_fields
             ]
             generation_parameters_copypaste.add_paste_fields("img2img", img_init, img2img_paste_fields, override_settings)

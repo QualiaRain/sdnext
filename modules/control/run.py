@@ -1,6 +1,5 @@
 import os
 import sys
-from functools import partial
 import cv2
 from PIL import Image
 from modules.logger import log
@@ -87,7 +86,7 @@ def set_pipe(p, has_models, unit_type, selected_models, active_model, active_str
         p.task_args['adapter_conditioning_scale'] = control_conditioning
         instance = t2iadapter.AdapterPipeline(selected_models, shared.sd_model)
         pipe = instance.pipeline
-        if inits is not None:
+        if has_inputs(inits):
             log.warning('Control: T2I-Adapter does not support separate init image')
     elif unit_type == 'controlnet' and has_models:
         p.extra_generation_params["Control type"] = 'ControlNet'
@@ -110,14 +109,14 @@ def set_pipe(p, has_models, unit_type, selected_models, active_model, active_str
         p.control_guidance_end = control_guidance_end
         instance = xs.ControlNetXSPipeline(selected_models, shared.sd_model)
         pipe = instance.pipeline
-        if inits is not None:
+        if has_inputs(inits):
             log.warning('Control: ControlNet-XS does not support separate init image')
     elif unit_type == 'lite' and has_models:
         p.extra_generation_params["Control type"] = 'ControlLLLite'
         p.controlnet_conditioning_scale = control_conditioning
         instance = lite.ControlLLitePipeline(shared.sd_model)
         pipe = instance.pipeline
-        if inits is not None:
+        if has_inputs(inits):
             log.warning('Control: ControlLLLite does not support separate init image')
     elif unit_type == 'reference' and has_models:
         p.extra_generation_params["Control type"] = 'Reference'
@@ -129,8 +128,8 @@ def set_pipe(p, has_models, unit_type, selected_models, active_model, active_str
         p.task_args['style_fidelity'] = p.fidelity
         instance = reference.ReferencePipeline(shared.sd_model)
         pipe = instance.pipeline
-        if inits is not None:
-            log.warning('Control: ControlNet-XS does not support separate init image')
+        if has_inputs(inits):
+            log.warning('Control: Reference does not support separate init image')
     else: # run in txt2img/img2img mode
         if len(active_strength) > 0:
             p.strength = active_strength[0]
@@ -322,6 +321,8 @@ def control_process(p: StableDiffusionProcessingControl,
         processed: processing.Processed = processing.process_images(p) # run actual pipeline
     else:
         script_run = True
+    if getattr(p, 'story_mode_error', None):
+        raise errors.ValidationError(f'Story mode failed: {p.story_mode_error}')
 
     # postprocessing
     if p.scripts is not None:
@@ -338,21 +339,24 @@ def control_process(p: StableDiffusionProcessingControl,
 
 
 def generate(*args, **kwargs):
-    generate_call = partial(control_run, *args, **kwargs)
-    # return [], '', '', 'Queued'
-    return generate_call()
+    is_scheduled = args[1] == 'scheduled'
+    if is_scheduled:
+        from modules import scheduler
+        return scheduler.enqueue_control_request(*args, **kwargs)
+    else:
+        return control_run(*args, **kwargs)
 
 
 def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
+                scheduler: str = '',
                 units: list[unit.Unit] | None = None, inputs: list[Image.Image] | None = None, inits: list[Image.Image] | None = None, mask: Image.Image = None, unit_type: str | None = None, is_generator: bool = True,
                 input_type: int = 0,
                 prompt: str = '', negative_prompt: str = '',
                 styles: list[str] | None = None,
                 steps: int = 20, sampler_index: int | None = None,
-                seed: int = -1, subseed: int = -1, subseed_strength: float = 0, seed_resize_from_h: int = -1, seed_resize_from_w: int = -1,
-                guidance_name: str = 'Default', guidance_scale: float = 6.0, guidance_rescale: float = 0.0, guidance_start: float = 0.0, guidance_stop: float = 1.0,
-                cfg_scale: float = 6.0, clip_skip: float = 1.0, cfg_image: float = 6.0, cfg_rescale: float = 0.7, cfg_true: float = 0.0, cfg_adaptive: float = 0.5, cfg_end: float = 1.0,
-                vae_type: str = 'Full', tiling: bool = False, hidiffusion: bool = False,
+                seed: int = -1,
+                cfg_name: str = 'Default', cfg_scale: float = 6.0, cfg_image: float = 6.0, cfg_rescale: float = 0.0, cfg_start: float = 0.0, cfg_stop: float = 1.0, cfg_true: float = 0.0, cfg_adaptive: float = 0.5,
+                clip_skip: float = 1.0, vae_type: str = 'Full', tiling: bool = False, hidiffusion: bool = False,
                 detailer_enabled: bool = False, detailer_prompt: str = '', detailer_negative: str = '', detailer_steps: int = 10, detailer_strength: float = 0.3, detailer_resolution: int = 1024,  detailer_classes: str = '',
                 hdr_mode: int = 0, hdr_brightness: float = 0, hdr_color: float = 0, hdr_sharpen: float = 0, hdr_clamp: bool = False, hdr_boundary: float = 4.0, hdr_threshold: float = 0.95,
                 hdr_maximize: bool = False, hdr_max_center: float = 0.6, hdr_max_boundary: float = 1.0, hdr_color_picker: str | None = None, hdr_tint_ratio: float = 0, hdr_apply_hires: bool = True,
@@ -383,7 +387,7 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
                 detailer_models: list | None = None, detailer_augment: bool | None = None,
                 img2img_color_correction: bool | None = None, color_correction_method: str | None = None, img2img_background_color: str | None = None,
                 img2img_fix_steps: bool | None = None, mask_apply_overlay: bool | None = None,
-                include_mask: bool | None = None, inpainting_mask_weight: float | None = None,
+                include_mask: bool | None = None,
                 # output and saving
                 samples_save: bool | None = None, samples_format: str | None = None,
                 save_images_before_highres_fix: bool | None = None, save_images_before_refiner: bool | None = None,
@@ -398,12 +402,13 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
                 schedulers_base_shift: float | None = None, schedulers_max_shift: float | None = None, schedulers_rescale_betas: bool | None = None,
                 schedulers_timestep_spacing: str | None = None, schedulers_timesteps_range: int | None = None,
                 schedulers_sigma_adjust: float | None = None, schedulers_sigma_adjust_min: float | None = None, schedulers_sigma_adjust_max: float | None = None,
+                schedulers_base_image_seq_len: int | None = None, schedulers_max_image_seq_len: int | None = None,
                 scheduler_eta: float | None = None, eta_noise_seed_delta: int | None = None, enable_batch_seeds: bool | None = None,
-                diffusers_generator_device: str | None = None, nan_skip: bool | None = None,
+                diffusers_generator_device: str | None = None,
                 sequential_seed: bool | None = None,
                 # prompt/attention overrides
                 prompt_attention: str | None = None, prompt_mean_norm: bool | None = None, diffusers_zeros_prompt_pad: bool | None = None,
-                te_pooled_embeds: bool | None = None, lora_apply_te: bool | None = None, te_complex_human_instruction: str | None = None, te_use_mask: bool | None = None,
+                te_pooled_embeds: bool | None = None,
                 # generation modifier overrides (hijack)
                 freeu_enabled: bool | None = None, freeu_b1: float | None = None, freeu_b2: float | None = None, freeu_s1: float | None = None, freeu_s2: float | None = None,
                 hypertile_unet_enabled: bool | None = None, hypertile_hires_only: bool | None = None, hypertile_unet_tile: int | None = None, hypertile_unet_min_tile: int | None = None,
@@ -428,6 +433,9 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
         inputs = []
     if units is None:
         units = []
+
+    if scheduler != 'none':
+        log.debug('Scheduler: start task')
     global pipe, original_pipeline # pylint: disable=global-statement
     if 'refine' in state:
         enable_hr = True
@@ -445,7 +453,7 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
     if sampler_index is None:
         log.warning('Sampler: invalid')
         sampler_index = 0
-    if hr_sampler_index is None:
+    if hr_sampler_index is None or hr_sampler_index == 'Same as primary':
         hr_sampler_index = sampler_index
     if isinstance(extra, list):
         extra = create_override_settings_dict(extra)
@@ -459,27 +467,19 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
         batch_size = batch_size,
         sampler_name = processing.get_sampler_name(sampler_index),
         seed = seed,
-        subseed = subseed,
-        subseed_strength = subseed_strength,
-        seed_resize_from_h = seed_resize_from_h,
-        seed_resize_from_w = seed_resize_from_w,
         denoising_strength = denoising_strength,
         skip_processing = skip_processing,
-        # modular guidance
-        guidance_name = guidance_name,
-        guidance_scale = guidance_scale,
-        guidance_rescale = guidance_rescale,
-        guidance_start = guidance_start,
-        guidance_stop = guidance_stop,
-        # legacy guidance
+        # guidance
+        cfg_name = cfg_name,
         cfg_scale = cfg_scale,
-        cfg_end = cfg_end,
-        clip_skip = clip_skip,
         cfg_image = cfg_image,
         cfg_rescale = cfg_rescale,
+        cfg_start = cfg_start,
+        cfg_stop = cfg_stop,
         cfg_true = cfg_true,
         cfg_adaptive = cfg_adaptive,
         # advanced
+        clip_skip = clip_skip,
         vae_type = vae_type,
         tiling = tiling,
         hidiffusion = hidiffusion,
@@ -544,7 +544,7 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
         # img2img and mask
         img2img_color_correction=img2img_color_correction, color_correction_method=color_correction_method, img2img_background_color=img2img_background_color,
         img2img_fix_steps=img2img_fix_steps, mask_apply_overlay=mask_apply_overlay,
-        include_mask=include_mask, inpainting_mask_weight=inpainting_mask_weight,
+        include_mask=include_mask,
         # output and saving
         samples_save=samples_save, samples_format=samples_format,
         save_images_before_highres_fix=save_images_before_highres_fix, save_images_before_refiner=save_images_before_refiner,
@@ -578,15 +578,15 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
         schedulers_base_shift=schedulers_base_shift, schedulers_max_shift=schedulers_max_shift,
         schedulers_rescale_betas=schedulers_rescale_betas, schedulers_timestep_spacing=schedulers_timestep_spacing,
         schedulers_timesteps_range=schedulers_timesteps_range,
+        schedulers_base_image_seq_len=schedulers_base_image_seq_len, schedulers_max_image_seq_len=schedulers_max_image_seq_len,
         schedulers_sigma_adjust=schedulers_sigma_adjust, schedulers_sigma_adjust_min=schedulers_sigma_adjust_min,
         schedulers_sigma_adjust_max=schedulers_sigma_adjust_max,
         scheduler_eta=scheduler_eta, eta_noise_seed_delta=eta_noise_seed_delta,
-        enable_batch_seeds=enable_batch_seeds, diffusers_generator_device=diffusers_generator_device, nan_skip=nan_skip,
+        enable_batch_seeds=enable_batch_seeds, diffusers_generator_device=diffusers_generator_device,
         sequential_seed=sequential_seed,
         # prompt/attention overrides
         prompt_attention=prompt_attention, prompt_mean_norm=prompt_mean_norm,
         diffusers_zeros_prompt_pad=diffusers_zeros_prompt_pad, te_pooled_embeds=te_pooled_embeds,
-        lora_apply_te=lora_apply_te, te_complex_human_instruction=te_complex_human_instruction, te_use_mask=te_use_mask,
         # generation modifier overrides (hijack)
         freeu_enabled=freeu_enabled, freeu_b1=freeu_b1, freeu_b2=freeu_b2, freeu_s1=freeu_s1, freeu_s2=freeu_s2,
         hypertile_unet_enabled=hypertile_unet_enabled, hypertile_hires_only=hypertile_hires_only,
@@ -625,7 +625,7 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
     if p.enable_hr and (p.hr_resize_x == 0 or p.hr_resize_y == 0):
         p.hr_upscale_to_x, p.hr_upscale_to_y = int(vae_scale_factor * int(p.width_before * p.hr_scale / vae_scale_factor)), int(vae_scale_factor * int(p.height_before * p.hr_scale / vae_scale_factor))
     elif p.enable_hr and (p.hr_upscale_to_x == 0 or p.hr_upscale_to_y == 0):
-        p.hr_upscale_to_x, p.hr_upscale_to_y = 8 * int(p.hr_resize_x / vae_scale_factor), int(vae_scale_factor * int(p.hr_resize_y / vae_scale_factor))
+        p.hr_upscale_to_x, p.hr_upscale_to_y = int(vae_scale_factor * int(p.hr_resize_x / vae_scale_factor)), int(vae_scale_factor * int(p.hr_resize_y / vae_scale_factor))
 
     global p_extra_args # pylint: disable=global-statement
     for k, v in p_extra_args.items():
@@ -697,11 +697,14 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
                         yield terminate(f'Video open failed: path={inputs} {e}')
                     return terminate(f'Video open failed: path={inputs} {e}')
 
+            condition_set = cap is None and isinstance(inputs, list) and len(inputs) > 1 and all(isinstance(image, Image.Image) for image in inputs) and sd_models.takes_condition_set(pipe) # a multi-image pipeline takes every input in one run
             while status:
                 processed_image = None
                 if frame is not None:
                     inputs = [Image.fromarray(frame)] # cv2 to pil
                 for i, input_image in enumerate(inputs): # loop per-input, but with early-break
+                    if condition_set and i > 0: # the set ran with the first input
+                        break
                     if pipe is None: # pipe may have been reset externally
                         if cap is None:
                             break # non-video: pipeline was consumed, no need to re-process remaining inputs
@@ -755,7 +758,7 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
                         continue
                     index += 1
 
-                    if getattr(pipe, 'skip_processing', False) or getattr(p, 'skip_processing', False):
+                    if (getattr(pipe, 'skip_processing', False) or getattr(p, 'skip_processing', False)) and mask is None:
                         p.init_images = inputs
                         p.extra_generation_params['Process'] = False
                     else:
@@ -772,6 +775,8 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
                                                                           has_models,
                                                                           active_units,
                                                                         )
+                        if condition_set: # the first input is the canvas, the rest of the set reaches the pipeline as given
+                            p.init_images = list(p.init_images) + inputs[1:]
                         if is_generator:
                             yield (None, blended_image, '') # result is control_output, proces_output
 
@@ -852,9 +857,9 @@ def control_run(state: str = '', # pylint: disable=keyword-arg-before-vararg
     debug_log(f'Ready: {image_txt}')
 
     html_txt = f'<p>Ready {image_txt}</p>' if image_txt != '' else ''
-    if len(info_txt) > 0:
+    if (info_txt is not None) and (len(info_txt) > 0):
         html_txt = html_txt + infotext_to_html(info_txt[0])
-    result = (output_images, blended_image, html_txt, output_filename)
+    result = (output_images, blended_image, html_txt, output_filename, info_txt or [])
     if is_generator:
         yield result
     return result

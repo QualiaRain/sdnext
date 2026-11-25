@@ -88,22 +88,27 @@ def get_images(input_images):
     if not isinstance(input_images, list):
         input_images = [input_images]
     for image in input_images:
-        if image is None:
-            continue
-        if isinstance(image, list):
-            output_images.append(get_images(image)) # recursive
-        elif isinstance(image, Image.Image):
-            output_images.append(image)
-        elif isinstance(image, str):
-            from modules.api.api import decode_base64_to_image
-            decoded_image = decode_base64_to_image(image).convert("RGB")
-            output_images.append(decoded_image)
-        elif hasattr(image, 'name'): # gradio gallery entry
-            pil_image = Image.open(image.name)
-            pil_image.load()
-            output_images.append(pil_image)
-        else:
-            log.error(f'IP adapter: unknown input: {image}')
+        try:
+            if image is None:
+                continue
+            if isinstance(image, list):
+                lst = get_images(image)
+                if len(lst) > 0:
+                    output_images.append(lst) # recursive
+            elif isinstance(image, Image.Image):
+                output_images.append(image)
+            elif isinstance(image, str):
+                from modules.api.api import decode_base64_to_image
+                decoded_image = decode_base64_to_image(image).convert("RGB")
+                output_images.append(decoded_image)
+            elif hasattr(image, 'name'): # gradio gallery entry
+                pil_image = Image.open(image.name)
+                pil_image.load()
+                output_images.append(pil_image)
+            else:
+                log.error(f'IP adapter: unknown input: {image}')
+        except Exception as e:
+            log.error(f'IP adapter: failed to process image: {e}')
     return output_images
 
 
@@ -142,12 +147,20 @@ def crop_images(images, crops):
     return images
 
 
+def group_offload_strip(pipe) -> bool:
+    # group offload hooks carry a parameter map from apply time; remove them before the denoiser gains or loses parameters
+    from modules.sd_offload_group import remove_group_offload_component
+    module = pipe.unet if getattr(pipe, 'unet', None) is not None else getattr(pipe, 'transformer', None)
+    return module is not None and remove_group_offload_component(module)
+
+
 def unapply(pipe, unload: bool = False): # pylint: disable=arguments-differ
     if len(adapters_loaded) == 0:
         return
+    stripped = group_offload_strip(pipe)
     try:
         if hasattr(pipe, 'set_ip_adapter_scale'):
-            pipe.set_ip_adapter_scale(0)
+            pipe.set_ip_adapter_scale(0.0 if len(adapters_loaded) == 1 else [0.0] * len(adapters_loaded)) # a scalar is rejected once several adapters are loaded
             if unload:
                 log.debug('IP adapter unload')
                 pipe.unload_ip_adapter()
@@ -157,12 +170,14 @@ def unapply(pipe, unload: bool = False): # pylint: disable=arguments-differ
             module = pipe.transformer
         else:
             module = None
-        if module is not None and hasattr(module, 'config') and module.config.encoder_hid_dim_type == 'ip_image_proj':
-            pipe.unet.encoder_hid_proj = None
-            pipe.config.encoder_hid_dim_type = None
-            pipe.unet.set_default_attn_processor()
-    except Exception:
-        pass
+        if module is not None and getattr(getattr(module, 'config', None), 'encoder_hid_dim_type', None) == 'ip_image_proj':
+            module.encoder_hid_proj = None
+            module.config.encoder_hid_dim_type = None # the forward demands image_embeds while this is set
+            module.set_default_attn_processor()
+    except Exception as e:
+        log.error(f'IP adapter unapply: {e}')
+    if stripped:
+        sd_models.set_diffuser_offload(pipe, op='model')
 
 
 def load_image_encoder(pipe: DiffusionPipeline, adapter_names: list[str]):
@@ -273,8 +288,7 @@ def parse_params(p: processing.StableDiffusionProcessing, adapters: list, adapte
         for i in range(len(adapter_masks)):
             adapter_masks[i] = mask_processor.preprocess(adapter_masks[i], height=p.height, width=p.width)
         adapter_masks = mask_processor.preprocess(adapter_masks, height=p.height, width=p.width)
-    if adapter_images is None:
-        log.error('IP adapter: no image provided')
+    if adapter_images is None or len(adapter_images) == 0:
         return [], [], [], [], [], []
     if len(adapters) < len(adapter_images):
         adapter_images = adapter_images[:len(adapters)]
@@ -352,6 +366,7 @@ def apply(pipe, p: processing.StableDiffusionProcessing, adapter_names=None, ada
         return False
 
     # main code
+    stripped = False
     try:
         t0 = time.time()
         repos = [adapter.get('repo', None) for adapter in adapters if adapter.get('repo', 'none') != 'none']
@@ -369,6 +384,7 @@ def apply(pipe, p: processing.StableDiffusionProcessing, adapter_names=None, ada
             kwargs['revision'] = revisions[0]
         if shared.opts.offline_mode:
             kwargs["local_files_only"] = True
+        stripped = group_offload_strip(pipe)
         pipe.load_ip_adapter(repos, **kwargs)
         adapters_loaded = names
         if hasattr(p, 'ip_adapter_layers'):
@@ -401,4 +417,7 @@ def apply(pipe, p: processing.StableDiffusionProcessing, adapter_names=None, ada
     except Exception as e:
         log.error(f'IP adapter load: adapters={adapter_names} repo={repos} folders={subfolders} names={names} {e}')
         errors.display(e, 'IP adapter: type=adapter')
+    finally:
+        if stripped:
+            sd_models.set_diffuser_offload(pipe, op='model')
     return True

@@ -17,6 +17,7 @@ import modules.loader
 import modules.hashes
 import modules.paths
 import modules.devices
+import modules.attention
 import modules.migrate
 from modules import shared
 from modules import call_queue
@@ -48,6 +49,7 @@ import modules.ui_extra_networks
 import modules.textual_inversion
 import modules.script_callbacks
 import modules.api.middleware
+import modules.scheduler
 
 
 if not modules.loader.initialized:
@@ -76,10 +78,6 @@ fastapi_args = {
 def initialize():
     log.debug('Initializing: modules')
     from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    from installer import register_sdnq
-    register_sdnq(skip=True, devices=modules.devices, shared=shared) # monkey-patch sdnq to use sdnext devices and shared modules
-
     from modules.models_hf import hf_init
     hf_init()
 
@@ -205,6 +203,8 @@ def load_model():
     shared.opts.onchange("temp_dir", modules.gr_tempdir.on_tmpdir_changed)
     for opt in modules.sd_offload_state.offload_reapply_options:
         shared.opts.onchange(opt, call_queue.wrap_queued_call(modules.sd_models.reapply_offload), call=False)
+    for opt in modules.attention.reapply_options():
+        shared.opts.onchange(opt, call_queue.wrap_queued_call(modules.attention.reapply), call=False)
     timer.startup.record("onchange")
 
 
@@ -250,7 +250,7 @@ def async_policy():
             if shared.cmd_opts.profile:
                 loop.slow_callback_duration = 0.001
             loop.set_debug(shared.cmd_opts.profile)
-            log.debug(f'AsyncIO: loop={loop}')
+            log.debug(f'AsyncIO: loop={loop.__class__.__name__}')
             loop.set_task_factory(verbose_task_factory)
             loop.set_exception_handler(self.handle_exception)
             return loop
@@ -307,9 +307,8 @@ def start_common():
             shared.opts.transformers_version = transformers_commit # update installed transformers version
     except Exception:
         pass
-    if shared.opts.clean_temp_dir_at_start:
-        modules.gr_tempdir.cleanup_tmpdr()
-        timer.startup.record("cleanup")
+    modules.gr_tempdir.cleanup_tmpdr()
+    timer.startup.record("cleanup")
 
 
 def mount_subpath(app):
@@ -323,6 +322,14 @@ def mount_subpath(app):
     shared.cmd_opts.subpath = shared.opts.subpath # update cmd_opts to match opts
     gradio.mount_gradio_app(app, shared.demo, path=shared.opts.subpath)
     log.info(f'Mounted: subpath="{shared.opts.subpath}"')
+
+
+def resolve_paths(allowed_paths):
+    folders = [modules.paths.resolve_output_path(f) for f in allowed_paths]
+    folders = [f for f in folders if os.path.isdir(f)]
+    folders = sorted(set(folders)) # remove duplicates
+    log.debug(f'Paths: {folders}')
+    return folders
 
 
 def start_server(
@@ -359,6 +366,23 @@ def start_server(
         path_to_local_server = f"http://{url_host_name}:{server_port}/"
     return server_name, server_port, path_to_local_server, app, server
 
+def get_paths():
+    allowed_paths = [os.path.dirname(__file__)]
+    if shared.cmd_opts.data_dir is not None and os.path.isdir(shared.cmd_opts.data_dir):
+        allowed_paths.append(shared.cmd_opts.data_dir)
+    if shared.cmd_opts.models_dir is not None and os.path.isdir(shared.cmd_opts.models_dir):
+        allowed_paths.append(shared.cmd_opts.models_dir)
+    if shared.cmd_opts.allowed_paths is not None:
+        allowed_paths += [p for p in shared.cmd_opts.allowed_paths if os.path.isdir(p)]
+    if os.environ.get('SD_PATH_DEBUG', None):
+        log.trace(f'Path allowed: why=args allowed={shared.demo.allowed_paths}')
+    if shared.opts.allowed_paths:
+        folders = [f.strip() for f in shared.opts.allowed_paths.split(',') if f.strip()]
+        allowed_paths = [f for f in folders if os.path.isdir(f)]
+    if os.environ.get('SD_PATH_DEBUG', None):
+        log.trace(f'Path allowed: why=opts allowed={shared.demo.allowed_paths}')
+    return allowed_paths
+
 
 def start_ui():
     log.debug('UI start sequence')
@@ -386,26 +410,20 @@ def start_ui():
     if len(gradio_auth_creds) > 0:
         log.info(f'Authentication enabled: users={len(list(gradio_auth_creds))}')
     auth_pairs = []
-    for cred in gradio_auth_creds:
+    for i, cred in enumerate(gradio_auth_creds):
         if ':' not in cred:
-            log.warning(f'Ignoring malformed auth entry: "{cred}"')
+            log.warning(f'Ignoring malformed auth entry: index={i} no separator')
             continue
         user, password = cred.split(':', 1)
         if len(user) == 0 or len(password) == 0:
-            log.warning(f'Ignoring malformed auth entry: "{cred}"')
+            log.warning(f'Ignoring malformed auth entry: index={i} user="{user}"')
             continue
         auth_pairs.append((user, password))
 
     global local_url # pylint: disable=global-statement
     stdout = io.StringIO()
-    allowed_paths = [os.path.dirname(__file__)]
-    if shared.cmd_opts.data_dir is not None and os.path.isdir(shared.cmd_opts.data_dir):
-        allowed_paths.append(shared.cmd_opts.data_dir)
-    if shared.cmd_opts.models_dir is not None and os.path.isdir(shared.cmd_opts.models_dir):
-        allowed_paths.append(shared.cmd_opts.models_dir)
-    if shared.cmd_opts.allowed_paths is not None:
-        allowed_paths += [p for p in shared.cmd_opts.allowed_paths if os.path.isdir(p)]
-    log.info(f'Server: name={server_name} port={shared.cmd_opts.port} paths={allowed_paths} ssl={shared.cmd_opts.tls_keyfile}:{shared.cmd_opts.tls_certfile} auth={len(auth_pairs)}')
+
+    log.info(f'Server: name={server_name} port={shared.cmd_opts.port} ssl={shared.cmd_opts.tls_keyfile}:{shared.cmd_opts.tls_certfile} auth={len(auth_pairs)}')
     with contextlib.redirect_stdout(stdout):
         import gradio.networking
         gradio.networking.start_server = start_server
@@ -423,14 +441,15 @@ def start_ui():
             show_api=False,
             quiet=True,
             favicon_path='ui/assets/favicon.svg',
-            allowed_paths=allowed_paths,
+            allowed_paths=get_paths(),
             app_kwargs=fastapi_args,
             _frontend=True and shared.cmd_opts.share,
         )
 
     uc = shared.demo.server.config
     get_name = lambda c: getattr(c, '__name__', c) # pylint: disable=unnecessary-lambda-assignment
-    log.debug(f'Server config: loop={shared.demo.server.loop} http={get_name(uc.http_protocol_class)} ws={get_name(uc.ws_protocol_class)} interface={uc.interface} workers={uc.workers} backlog={uc.backlog} timeout_keep_alive={uc.timeout_keep_alive} timeout_notify={uc.timeout_notify} ws_max_size={uc.ws_max_size} ws_max_queue={uc.ws_max_queue} ws_ping_interval={uc.ws_ping_interval} ws_ping_timeout={uc.ws_ping_timeout}')
+    log.debug(f'Server config: loop={shared.demo.server.loop} http={get_name(uc.http_protocol_class)} ws={get_name(uc.ws_protocol_class)} interface={uc.interface} workers={uc.workers} backlog={uc.backlog} timeout_keep_alive={uc.timeout_keep_alive}')
+    # log.debug(f'Server config: loop={shared.demo.server.loop} http={get_name(uc.http_protocol_class)} ws={get_name(uc.ws_protocol_class)} interface={uc.interface} workers={uc.workers} backlog={uc.backlog} timeout_keep_alive={uc.timeout_keep_alive} timeout_notify={uc.timeout_notify} ws_max_size={uc.ws_max_size} ws_max_queue={uc.ws_max_queue} ws_ping_interval={uc.ws_ping_interval} ws_ping_timeout={uc.ws_ping_timeout}')
 
     if shared.cmd_opts.data_dir is not None:
         modules.gr_tempdir.register_tmp_file(shared.demo, os.path.join(shared.cmd_opts.data_dir, 'x'))
@@ -449,7 +468,7 @@ def start_ui():
             log.info(f'Public URL: {proto}://{public_ip}:{shared.cmd_opts.port}')
     if shared.cmd_opts.docs:
         log.info(f'API docs: {local_url[:-1]}/docs') # pylint: disable=unsubscriptable-object
-        log.info(f'API redocs: {local_url[:-1]}/redocs') # pylint: disable=unsubscriptable-object
+        # log.info(f'API redocs: {local_url[:-1]}/redocs') # pylint: disable=unsubscriptable-object
     if share_url is not None:
         log.info(f'Share URL: {share_url}')
     if getattr(shared.cmd_opts, 'enso', False):
@@ -487,10 +506,15 @@ def webui(restart=False, _exit=False, profiler=None):
 
     start_common()
     app = start_ui()
+    if shared.cmd_opts.test:
+        from pipelines.generic_test import test_server_wiring
+        test_server_wiring(app)
     modules.script_callbacks.after_ui_callback()
 
     load_model()
+    modules.scheduler.start_worker(shared.cmd_opts.test)
     mount_subpath(app)
+    shared.demo.allowed_paths = resolve_paths(shared.demo.allowed_paths)
     shared.opts.save()
 
     if shared.cmd_opts.profile:

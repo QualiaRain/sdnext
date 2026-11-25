@@ -1,10 +1,558 @@
 # Change Log for SD.Next
 
-## Highlights for 2026-08-26
+## Update for 2026-10-29
+
+### Highlights for 2026-10-29
+
+*What's new in this release?*
+- New base model: **Bria FIBO 2.0** and improvements to **MOSS-Image** and **Ming-Image** workflows
+- Major improvements to **Prompt Enhance** functionality to make it more versatile and cover usage in new structured/json based prompts
+- New playground feature **Story Mode**
+- Expanded native **LoRA** support with compatibility for multiple model types
+- Updates to **AI Coding** instructions and skills: try your favorite model/tool on SD.Next, you might be surprised how quickly it adapts and performs
+- Codebase cleanup: removed deprecated options that were left as legacy remnants
+- And many more smaller improvements and fixes...
+
+> [!IMPORTANT]
+> Python 3.10 is end-of-life as of October 2026!
+
+See [changelog](https://github.com/vladmandic/sdnext/blob/dev/CHANGELOG.md) below for full details...
+
+[Home](https://vladmandic.github.io/sdnext/) | [ChangeLog](https://github.com/vladmandic/sdnext/blob/dev/CHANGELOG.md) | [Docs](https://vladmandic.github.io/sdnext-docs/) | [Discord](https://discord.com/invite/sd-next-federal-batch-inspectors-1101998836328697867) | [Sponsor](https://github.com/sponsors/vladmandic)  
+
+### Details for 2026-10-29
+
+- **Models**
+  - [Bria FIBO 2.0](https://huggingface.co/briaai/Fibo-2.0-dev) *Dev* base and *Edit Turbo* distilled variants  
+    *architecture*: 8.1B flow-matching transformer with Qwen3-VL-4B text-encoder  
+    *note*: this is a [gated model](https://vladmandic.github.io/sdnext-docs/Gated)  
+    *note*: BriaFIBO is designed to work with highly structured [JSON prompts](https://docs.bria.ai/vgl#5-schema-reference)  
+    a plain string prompt is read as a short description, a form the model was also trained on, but a structured caption gives far more control  
+    *note*: single-file transformers in the ComfyUI layout load through the UNET selector and LoRAs load through the native loader  
+  - [OpenMOSS MOSS-Image](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base) add *sdnq-uint4* pre-quants and add *image2image* and *inpaint* workflows  
+    *note*: model is trained with highly shifted sigma, so its not ideal for i2i workflows  
+    *note*: this also unlocks use in hires/refine/detailer workflows  
+  - [lodestones Kromoss](https://huggingface.co/lodestones/Kromoss) fine-tune of MOSS-Image  
+  - [inclusionAI Ming-Image Design 0.1](https://huggingface.co/OzzyGT/ming_image_0_1_design_diffusers) add *ref-image* workflow  
+    *note*: model is not a true image edit model, but this gives it some editing capabilities  
+- **Coding**  
+  expand ai/ml instructions and skills  
+  see [instructions](https://github.com/vladmandic/sdnext/blob/dev/.github/copilot-instructions.md) and [skills readme](https://github.com/vladmandic/sdnext/blob/dev/.github/skills/README.md) for details  
+- **Prompt Enhance**
+  - add presets for different prompt styles: *Standard, Simple, Detailed, Creative, Structured, JSON, Tag*  
+    use different presets depending on the desired prompt style and model's preferred input format  
+    added as more and more models require highly structured and/or json-based prompts  
+  - set [Qwen-3.5-4B sdnq-uint8](https://huggingface.co/SD-Next/Qwen-3.5-4B-sdnq-uint8) as default model for all prompt enhance and caption tasks  
+  - improve all system prompts
+  - improve thinking mode
+- **Story Mode**
+  - new story mode feature for generating multiple slides in a sequence  
+    in *extras -> story mode*  
+    provide input image and use base prompt to write a short story  
+    the system will use llm of choice to caption the image and define prompt for each slide of the story  
+    works best with edit-models, but can be used in text-to-image and image-to-image modes as well  
+    *note*: this is a playground thing, dont expect full cartoon level quality in a single shot  
+- **LoRA**
+  - major cleanup of older lora code and full switch to *native-dispatcher* introduced last month
+  - native dispatcher: *sd, sdxl, sd3, f1, f2, f3, chroma, zimage, ernieimage, anima, krea2, minimaxh3, qwen21, moss, boogu, fibo2, ideogram4*
+- **Metadata**
+  - improve model hash info for all models
+  - add unet hash if using custom unet/dit
+  - add prompt from style to metadata template field
+- **DLSS**
+  - use streaming for DLSS video processing  
+    allows near-infinite video length without excessive memory usage  
+  - allow custom video codecs and options
+- **MicroDecoder**
+  - add support for additional vae families  
+    supported: *sd, sdxl, sd3, f1, f2, hy, dcae, mage, qwen, qwen21, wan21, wan22, minimaxh3, cog, sefi*  
+    too see how different vae families map to different models, see <https://huggingface.co/SD-Next/MicroDecoder>  
+- **Video**
+  - add option in *Settings -> Media Options -> Videos convert for UI playback*  
+    depencing on choice of codec and settings some generated videos may not be playable in browser  
+    this allows sdnext to convert generated video to a temporary copy for ui playback  
+- **Wiki**
+  - updates to: `Scheduler`, `Models`, `Model-Support`, `Docker`, `AMD-ROCm`, `AMD-MIOpen`, `Detailer`, `LoRA`, `LoRA-Technical`
+- **Docker**
+  - update `Dockerfile` for all supported platforms
+  - [SD.Next CUDA docker image](https://hub.docker.com/repository/docker/vladmandic/sdnext-cuda) rebuild and update
+- **Logging**
+  - customizable logging theme  
+    see `data/console.json` for defaults and specify custom file using env variable `SDNEXT_CONSOLE_THEME`  
+- **Internal**
+  - end-of-life for `python==3.10`  
+    see [Python 3.10 EOL](https://endoflife.ai/article-python-310-eol) for details  
+  - update major requirements
+  - update `setuptools`, thanks @wbkearly
+  - expand `--test` behavior
+  - infer transformers `native_spec` everywhere where its not explicitly set
+  - remove number of params from codebase as obsolete and no-op for over a year:  
+    *note*: this may cause breakage in extensions that rely on obsolete params  
+    removed: `subseed, subseed_strength, seed_resize_from_h/w, do_not_reload_embeddings, nan_skip, inpainting_mask_weigtht, initial_noise_multiplier, inpainting_fill, te_complex_human_instruction, te_use_mask, firstphase_width, firstphase_height`  
+- **Fixes**
+  - api: return complete set in GET /sdapi/v1/options, thanks @Jackmeson1
+  - bria: fibo 2 inpaint masks reach the pipeline, caption text draws with the repo fonts, the text encoder is shared with qwen3-vl-4b
+  - caption: get/set attention fallbacks
+  - cogview: support offloading
+  - dlss: save once when running as extras
+  - dlss: do not run other postprocess again
+  - krea2: use prequant text-encoder when loading pre-quant model
+  - launch: dont overwrite existing LD_LIBRARY_PATH
+  - lora: bias deltas no longer refused when the model is quantized or native fuse is off
+  - lora: resolve a/b peft keys, thanks @li-lizhe
+  - lora: trim zero-padded input columns of fused-layout deltas to the module width
+  - mageflow: load single-file transformers, including low-rank modulation checkpoints (MageTrail 0.3+)
+  - microdecoder: improve error handling
+  - microdecoder: warn once on errors
+  - moss: downloaded moss-image models appear in the model list
+  - moss: performance optimizations
+  - moss: single-file model loading support
+  - network preview: handle unets
+  - network preview: fix stale cache
+  - offload: balanced offload clear stale state on unload, thanks @Jackmeson1
+  - offload: group offload keeps text encoder layers whole, so qwen3.5 encoders run with causal-conv1d installed
+  - offload: group offload recognizes vae encode and decode entry points with current diffusers
+  - prompt encode: expand simple str-to-json handling for models that require json
+  - prompt encode: invalidate cache on te or lora change, thanks @Jackmeson1
+  - prompt enhance: autodetext txt vs img llms
+  - rocm: add explicit support for gfx1030, thanks @resonantsky
+  - rocm: remove obsolete switches from rocm script, thanks @resonantsky
+  - scheduler: delete orphan records on record deletion
+  - sdnq: attention dtype and mask fixes
+  - seedvr: unblock usage on non-cuda devices
+  - state: race condition when settings are changed while generate is running
+  - styles: json prompts keep their braces when extra-network tags follow them
+  - ui: fallback template load method when running on older server
+  - ui: autohide panels
+  - unet: hash on first load
+  - video: gradio do not recode video in-place
+  - wan: loading route changes video frame count, thanks @Jackmeson1
+
+## Update for 2026-10-18
+
+### Highlights for 2026-10-18
+
+Leading with major new features: native **Task Scheduler** and **Queue Management**, improved handling and usability of **Edit Models**, improved **UI Performance**, and enhanced in-depth **Benchmarking** capabilities  
+Plus adding few new models: *BFL Flux.3 Klein*, *Ming-Image Design 0.1*, *MOSS-Image*, *Qwen-Image 2.1 Turbo*, *Google Nano-Banana 2.1*  
+And quite a lot of other smaller improvements and bug fixes  
+
+See [changelog](https://github.com/vladmandic/sdnext/blob/dev/CHANGELOG.md) below for full details
+
+[Home](https://vladmandic.github.io/sdnext/) | [ChangeLog](https://github.com/vladmandic/sdnext/blob/dev/CHANGELOG.md) | [Docs](https://vladmandic.github.io/sdnext-docs/) | [Discord](https://discord.com/invite/sd-next-federal-batch-inspectors-1101998836328697867) | [Sponsor](https://github.com/sponsors/vladmandic)  
+
+### Details for 2026-10-18
+
+- **Models**  
+  - [inclusionAI Ming-Image Design 0.1](https://huggingface.co/OzzyGT/ming_image_0_1_design_diffusers) in *base* and *sdnq-uint4* variants  
+    Ming-Image is as a 6B-parameter flow-matching transformer with 16B-parameter custom text encoder  
+    workflows: t2i model for general use, optimized for ui, infographic and poster design  
+    *note*: prompt using natural language, tag sequences or JSON layouts  
+  - [OpenMOSS MOSS-Image](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base) in *base* and *sft* (fine-tuned) variants  
+    MOSS-Image is a 5B parameter single-stream DiT with the Qwen3.5-9B text encoder  
+    workflows: t2i  
+    *note*: prompt using natural language, tag sequences or JSON layouts  
+  - [Black Forest Labs FLUX.3 Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein-base) in *base*, *turbo* and *sdnq-uint4*variants  
+    Flux.3 is a 5.6B parameter flow-matching transformer with Qwen3-VL-4B text-encoder with  
+    workflows: t2i and image editing  
+  - [Qwen Image 2.1 Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) in *base* and *sdnq-uint4* variants  
+  - [Google Nano Banana 2.1](https://deepmind.google/models/model-cards/nano-banana-2-1) *cloud* model  
+- **Scheduler**  
+  new native *Task Scheduler* and *Queue Management*  
+  add any image or video task to the scheduler and execute it in q queue or at a specific time  
+  see [scheduler documentation](https://vladmandic.github.io/sdnext-docs/Scheduler/) for details  
+- **Edit Models**  
+  *edit* models work differently than more traditional *i2i/inpaint* models as they use indirect reference image(s)  
+  **hires** and **detailer** now set condition-image on edit models thus unlocking advanced workflows  
+  supported models: *Qwen-Image 2.1, Qwen-Image-Edit and Edit Plus, FLUX.2, FLUX.1 Kontext, GLM-Image, JoyImage Edit Plus*  
+- **Benchmark**  
+  in-depth benchmarking of quantization and attention parameters  
+  provides clear recommendations based on benchmark results  
+  available via UI: *System -> Benchmark* or CLI: `cli/sdnq-attention-benchmark.py`  
+  *note*: depending on benchmark settings/depth, it may take a very long time to complete  
+- **UI**  
+  massive performance improvements to load times and responsiveness  
+  - parallel template loading
+  - html custom hash for improved caching and performance
+  - js split bundle
+- **MicroDecoder**
+  - [microdecoder](https://huggingface.co/SD-Next/MicroDecoder) is now *default* for live previews
+  - additional trained model type families
+  - extended mapping of base model types to microdecoder family
+  - allow training of custom vae classes
+- **Internal**
+  - switch hosted models from private repo to <https://huggingface.co/SD-Next>
+  - update `sdnq=0.29.0`
+  - sparse attention updates
+- **Fixes**
+  - anima: load repos in the diffusers modular layout
+  - api: `--cors-origins` entries separated by a comma and a space
+  - api: auth check for users with a non-ascii password
+  - api: error log omits the request query
+  - api: errors logged on regular endpoints, not on quiet ones
+  - api: folders allowed for one file request no longer stay allowed for later requests
+  - api: rate limit and log costs match the exact path or the route template, not other routes' prefixes
+  - api: register `/sdapi/v1/framepack` with video upscale options
+  - color correction: histogram method returns rgb instead of rgba
+  - color correction: keep transparency of rgba outputs, wavelet and adain no longer fail on them
+  - color correction: transparent outputs are matched on their visible pixels
+  - color correction: wavelet method keeps the generated image and matches only its colors
+  - dlss: do not run detailer twice if enabled
+  - enso: disable if not specified in startup
+  - framepack: a run after an interrupted job no longer ends at once without output
+  - gallery: correctly name custom folders
+  - inpaint: do not skip preprocessing when mask is not empty
+  - infotext: a value starting with a double quote no longer swallows the next parameter
+  - infotext: parse error on values with superscript or circled digits
+  - infotext: parser stall on long runs of words or spaces without a colon
+  - infotext: quoted values with escaped quotes, and a parser stall on unterminated ones
+  - installer: server restart when the venv is not activated
+  - ipadapter: jobs without an adapter after an adapter job
+  - ipadapter: loading and unloading adapters under group offload
+  - lora: reset loaded networks if refiner prompt is used
+  - mps: fix torch gc issue, thanks @diesse
+  - networks: improve model title and type detection
+  - offload: balanced offload warns when a module exceeds the gpu limit and part of it runs from cpu
+  - offload: group offload logs a denied pin once per component
+  - preview: race condition when handing over final vs last preview image
+  - rocm: arch detection with newer windows drivers, thanks @crashingalexsan
+  - rocm: disable HSA_XNACK on unsupported architectures, thanks @resonantsky
+  - samplers: update ui when sampler settings change, thanks @resonantsky
+  - sdnq: better handle compute dtype
+  - server: `--auth` values masked in the startup log and `/sdapi/v1/cmd-flags`
+  - server: create the `data` folder in a new `--data-dir`, so the metadata cache saves
+  - ui: update dev packages and rebuild
+  - upscaler: fix aurasr for non-cuda devices, thanks @li-lizhe
+  - video: accept only rate and quality codec options
+  - video: no error logged after framepack upscale or seedvr interpolation
+  - video: reject output extensions other than letters and digits
+
+## Update for 2026-10-06
+
+### Highlights for 2026-10-06
+
+Service release which brings several updates and fixes, but most importantly verified and locked down *torch/compute* configurations for all supported GPUs and platforms.
+For optimal experience, either perform a fresh install or delete the `venv` folder so all required libs are clean-installed.
+
+See [changelog](https://github.com/vladmandic/sdnext/blob/dev/CHANGELOG.md) below for full details.
+
+[Home](https://vladmandic.github.io/sdnext/) | [ChangeLog](https://github.com/vladmandic/automatic/blob/master/CHANGELOG.md) | [Docs](https://vladmandic.github.io/sdnext-docs/) | [Discord](https://discord.com/invite/sd-next-federal-batch-inspectors-1101998836328697867) | [Sponsor](https://github.com/sponsors/vladmandic)  
+
+### Details for 2026-10-06
+
+- **Torch**  
+  update all torch versions to best known options:  
+  - **cuda**: `torch==2.14.1+cu132`
+  - **rocm/linux**: `torch==2.14.1+rocm7.14`
+  - **rocm/windows**: `torch==2.13.0+rocm10.0.0`
+  - **xpu**: `torch==2.14.1+xpu`
+  - **openvino**: `torch==2.11.0+cpu` with `openvino==2026.4.1`
+  - **zluda**: `torch==2.7.1+cu118` with `zluda==3.9.5`
+  - **mps**: `torch==2.14.1`
+ 
+  notes:
+  - sdnext only updates `torch` if its not already installed  
+    for best experience use `--reinstall` flags to force updates or delete `venv` folder  
+  - if you want to manually install `torch`, sdnext will not interfere/change it  
+  - if you want to try cutting-edge versions of torch  
+    use the `--use-nightly` flag  
+  - zluda should only be used on older amd gpus not supported by rocm/windows  
+- **Compute**
+  - sdnq: support double-quant, including `nvfp4`
+  - sdnq: set commit-locked on `master` branch and latest on `dev` branch  
+  - compile: option *skip torch compile for TE* so a new prompt length or image size does not trigger a recompile  
+    see *settings -> compute settings*  
+  - rocm: updated *rocm advanced config* script, thanks @resonantsky
+- **Fixes**
+  - schedulers: update init signature for new configuration options
+  - rocm: remove incompatible env flags
+  - test: update `--test` workflow
+  - paths: improve handling of allowed paths and add settings option to extend them
+  - reference: update missing reference thumbnails
+  - hires: no output-size warning or infotext entry for the image the hires pass upscales itself
+  - control: no output-size warning or infotext entry when the processed input sets the size
+  - triton: skipping autotune runs the first config the kernel's own pruning keeps
+  - gc: aux models use correct gc method, thanks @li-lizhe
+  - control: controlnet with a separate init image uses the unit's processed image
+  - control: controlnet with *init image same as control* uses the unit's processed image
+  - control: multiple units on controlnet-union
+  - control: t2i-adapter, controlnet-xs and controllite model lists follow the loaded model type
+  - control: live preview and interrupt for sd and sdxl controlnet without an init image
+
+## Update for 2026-10-01
+
+### Highlights for 2026-10-01
+
+*What's New*? This release brings:
+- Few new models: **Qwen-Image 2.1**, **Bria Fibo 1.5** and **ObjectClear**
+- **DLSS5** reimagined for much higher performance and full cross-platform and cross-gpu support
+- New live-preview method using **MicroDecoder**
+- Better handling of multi-image reference editing
+- Compute updates for *ROCm, OpenVINO, and XPU*
+- Massive updates to UI tooltips/hints: *over 1,000 new entries and revised existing ones*
+
+Plus quite a few other improvements and inevitable bug-fixes, see full changelog below for details...
+
+[Home](https://vladmandic.github.io/sdnext/) | [ChangeLog](https://github.com/vladmandic/automatic/blob/master/CHANGELOG.md) | [Docs](https://vladmandic.github.io/sdnext-docs/) | [Discord](https://discord.com/invite/sd-next-federal-batch-inspectors-1101998836328697867) | [Sponsor](https://github.com/sponsors/vladmandic)  
+
+### Details for 2026-10-01
+
+- **Models**
+  - [Qwen-Image 2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) in *base*, *sdnq-4bit* and *sdnq-8bit* variants  
+    Qwen-Image 2.1 is a unified text-to-image and image editing model  
+    with 7B single-stream block-causal transformer with Qwen3-VL 8B text encoder and 64-channel RGBA autoencoder  
+    native transparent output, up to 10 reference images for editing, 2K native resolution  
+  - [Bria Fibo 1.5](https://huggingface.co/briaai/Fibo-1.5) in *base*, *edit*, and *edit-turbo* variants  
+    BriaFIBO is 8B parameter text-to-image and edit-model using SmolLM3-3B text encoder and with multi-reference editing support  
+    *note*: BriaFIBO is designed to work with highly structured [JSON prompts](https://docs.bria.ai/vgl#5-schema-reference)  
+    if you provide a simple string-based prompt, sdnext will convert it to naive JSON, but it will be sub-optimal  
+  - [ObjectClear](https://github.com/zjx0101/ObjectClear) in *base* variant  
+    ObjectClear specialized model for object removal using mask-guided inpainting and derived from SDXL  
+    *note*: for optimal results, provide a clear mask indicating target areas and prompt what should be removed  
+- **Compute**
+  - update `diffusers==0.41.0.dev0`
+  - `rocm` linux update to `2.14.0+rocm7.14` *stable* and `2.15.0+rocm10.0` *nightly*
+  - `openvino` update to `torch==2.14.0` with `openvino==2026.4.0`
+  - `xpu` update to `torch==2.14.0+xpu`
+  - `rocm` windows update to `torch==2.14.0` with `rocm==10.0.0`  
+    `rocm` windows installation move to *stable* amd wheels, thanks @resonantsky  
+  - options to skip triton autotune for entire model or just text-encoder  
+    in *settings -> compute settings*  
+  - warn if torch acceleration is installed but not available
+- **DLSS** *(reimagined)*
+  - complete reverse-engineering of *nVidia DLSS* to enable gpu-agnostic usage (can even run on cpu)
+  - supports DLSS *NeuralRender*, *SuperRes*, and *FrameGen*
+  - operations can be chained in any desired order
+  - supports image and video processing (with motion vectors for stabilization)
+  - can be used via *generate -> extras* or as a separate *process* workflow
+  - additional gpu-acceleration for cuda is included, but skipped on non-cuda devices
+  - no installation needed, just enable and thats it!
+  - cli usage in `modules/dlss/cli-dlss.py`  
+- **Preview**
+  - full refactor: refactored *taesd*, added *micro-decoder*, removed *simple* and *approximate* methods
+  - new [MicroDecoder](https://huggingface.co/vladmandic/MicroDecoder) vae implementation  
+    used for live-preview as quick vae and can be trained on any model  
+    supported *architectures: sd, sdxl, f1, f2, qwen, qwen21, wan21, h3*  
+  - available preview methods: *None, Micro, Tiny (TAESD), Full*
+  - new *setting -> live preview -> force live preview on each step*  
+    instead of relying on polling and low-priority updates, forces preview calculation on each step  
+  - previews now work on batched generations
+- **Other**
+  - **edit-models**: simplify usage of multi-image reference editing  
+    automatically handle: flux.2, glm-image, nano-banana, joy-image-edit, qwen-image-edit
+  - **processors**: `DWPose`, `RTMW`, `RTMO`: image processor updates, thanks @kirtasshh  
+    refactored to use `ONNX` instead of obsolete `mmpose` lib and with additional configurable settings  
+  - **lora**: extend support for more model types
+  - **scheduler**: expose base and max image sequence lengths  
+    recommended to change when target resolution is significantly different from the base resolution  
+  - **detailer**: add option to skip specific classes using `[SKIP=name]` in the detailer prompt, thanks @kirtasshh
+  - **watermarking**: updated code for both image(visible) and text(invisible) watermarking  
+    new api endpoint: `/sdapi/v1/watermark` with `POST` and `GET` methods  
+    new cli example: `cli/api-watermark.py`  
+- **UI**
+  - massive improvement to built-in tooltips/hints  
+    over 1,000 new entries, now at zero missing ui controls or settings  
+    revised existing ones  
+  - manual clear of errors/warnings, thanks @kirtasshh
+  - selecting lora from networks panel inserts it in active prompt instead of just default, thanks @kirtasshh
+- **Fixes**
+  - api: control endpoint with input images
+  - api: hardening all all file-access api endpoints
+  - caption: improve qwen image handling
+  - caption: improve error handling
+  - civitai: better handle downloads and naming
+  - civitai: reference downloads no longer log an unmapped model type
+  - control: hires fixed size keeps the requested width on 16 px and 32 px models
+  - detailer: use of lora models, thanks @kirtasshh
+  - dlss: the detailer and the other per-image steps run once when dlss is off
+  - grid: images with transparency keep it in grids and live previews
+  - hints: duplicate labels
+  - img2img: inputs reach multi-image models as one condition set on every route and the requested size sets the output size
+  - img2img: qwen-image, flux.2, glm-image align sizes to the 16 px floor
+  - img2img: warn and record in the infotext when the output size follows the input image instead of the request
+  - lora: native loading applies the alpha diffusers and diffsynth files store in metadata
+  - lora: alibaba-pai qwen-image 2.1 fun-acc 4-step runs on the sigma grid it was distilled for
+  - metadata: correct refine prompt restore, thanks @QualiaRain
+  - networks: name mapping for network models and loras
+  - networks: preview mapping for reference networks
+  - offload: enable offload using streams on different gpus, thanks @li-lizhe
+  - offload: places the vae on-demand behind the vae hijack for group offload
+  - pag: attention guidance engages again on sd15 and sdxl
+  - pixelsmith: vae tiling, thanks @li-lizhe  
+  - preview: remove flicker when finishing generation
+  - preview: better route decode call based on latents ndim
+  - prompt cache: bypass when condition images are encoded
+  - scheduler: when creating sampler, copy all valid options from default sampler
+  - scheduler: debounce sampler options save
+  - seedvr: handle temporal overap
+  - styles: fix infotext parsing, thanks @obelisk-complex
+  - temp file: gradio temp file error handling
+  - temp file: gradio temp file error handling
+  - txt2img: fix hires strength handling
+  - vae tiling: tile size setting applies to 3d vaes, 16x vae tile geometry
+  - video: handle failed model load without loading default model, thanks @QualiaRain
+
+## Update for 2026-09-17
+
+### Highlights for 2026-09-17
+
+*What's New*? Well, code-wise, this is a big one...  
+First, a-lot-of-optimizations:
+- Updated core packages
+- Improved **LoRA** performance and quality, especially with quantized models
+- Newly structured **attention** mechanisms
+- Modular pipelines with new **guidance** methods
+- Support for different **caching** stacks
+- Compute updates across the board
+
+And some cool new stuff and models:
+- **DLSS v5** integration  
+- New models: **Anima 2.9B**, **LLaDa-Image**  
+- And few cloud models: *Google's Gemini, NanoBanana, Veo, Omni* and *X.AI's Grok*  
+- Some (light) UI restyling
+
+Plus inevitable bug-fixes...
+
+[Home](https://vladmandic.github.io/sdnext/) | [ChangeLog](https://github.com/vladmandic/automatic/blob/master/CHANGELOG.md) | [Docs](https://vladmandic.github.io/sdnext-docs/) | [Discord](https://discord.com/invite/sd-next-federal-batch-inspectors-1101998836328697867) | [Sponsor](https://github.com/sponsors/vladmandic)  
+
+### Details for 2026-09-17
+
+- **Models**
+  - [Anima 2.9B Preview v1](https://huggingface.co/yeoj34760/Anima-2.9B)  
+    expanded version of Anima 2B  
+  - [inclusionAI LLaDA-Image](https://huggingface.co/inclusionAI/LLaDA-Image) in *base* and *turbo* variants  
+    LLaDA-Image is a 6.5B transformer with massive 16.3B fully-custom MoE text-encoder and optional 1.3B SigVQ conditioning model  
+    with support for text-to-image, vq-conditioned text-to-image and image-editing workflows  
+    *note* model is extremely quantization sensitive so minimum allowed quant type is `uint8`  
+  - [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) updates  
+    new [SDNQ-uint8](https://huggingface.co/OzzyGT/MiniMax_H3_sdnq_8bit_pruned) pre-quantized *base* and *pruned* variants  
+    new [Nunchaku-Lite](https://huggingface.co/rootonchair/MiniMax-H3-nunchaku-lite-int4) variant  
+    new [VDN](https://huggingface.co/OpenVDN/vdn-minimax-h3) *video-delta-net* variant  
+- **LoRA**
+  - see [LoRA docs](https://vladmandic.github.io/sdnext-docs/LoRA) for all of the improvements and usage instructions  
+    *note*: lora now has its own settings section in *settings -> lora*
+  - new apply engine that allows lora to be applied much faster
+  - new calibration engine that allows lora to be applied with far smaller error when dealing with highly quantized models
+  - *note*: calibration data is stored once calculated so it can be reused for future runs  
+    location is `models/calibration` folder  
+  - new factor cache that allows lora effects to be pre-calculated and persistently cached for future runs  
+    location is `models/lora-factor-cache` folder  
+  - multi-network stack modes  
+    can significantly improve lora quality when using multiple loras at once  
+  - per-block strength
+  - native support for **MiniMax**
+    see [MiniMax Turbo LoRA collection](https://huggingface.co/vladmandic/MiniMax-H3-Turbo-LoRA) for LoRAs and examples  
+- **DLSS**
+  - add DLSS support for: *NeuralRender, SuperSample and FrameGen*  
+    dlls 5 caused quite a stir, but combined with generative ai it becomes a nice tool  
+  - available as part of image/video generate workflows via *extras -> dlss*  
+    or as a standalone *processing* workflow  
+    or via xyz grid  
+  - *note*: requires nvidia rtx gpu, windows platform and compatible gpu drivers  
+    but...it can be used from wsl2: unpack required package on windows host and you can access it from the wsl2 environment  
+  - *install*: requires [DLSS 5 Visual Enhancer](https://github.com/Merserk/dlss5-visual-enhancer/releases/tag/v7.0)  
+  - *diag*: enable `SD_DLSS_DEBUG=true` and monitor `dlss.log` in the package directory  
+- **Attention**
+  - see [Attention docs](https://vladmandic.github.io/sdnext-docs/Attention) for details and usage instructions  
+    *note*: attention now has its own settings section in *settings -> cross attention*  
+    *note*: this is a breaking change - if you had custom attention settings in previous releases, you will need to re-apply them in the new settings section  
+  - new `sparse-attention` method that can be combined with other attention methods  
+    to reduce memory usage and improve performance on large models  
+  - new attention mechanisms decision tree and apply method refactor
+- **Modular Pipelines**
+  - see [Modular Pipelines docs](https://vladmandic.github.io/sdnext-docs/Modular-Pipelines) for details and usage instructions
+  - new model **Guidance** stack for modular pipelines  
+    includes: *CFG, PAG, Auto, Zero, APG, SLG, SEG, TCFG, FDG*  
+    see [Guidance docs](https://vladmandic.github.io/sdnext-docs/Guidance) for details and usage instructions  
+  - new model **Caching** stack for modular pipelines  
+    includes: *FasterCache, FirstBlockCache, LayerSkip, MagCache, PyramidAttentionBroadcast, TaylorSeerCache, TextKVCache*  
+    see [Caching docs](https://vladmandic.github.io/sdnext-docs/Caching) for details and usage instructions
+  - implement progress and preview
+  - intercept and profiling hooks
+  - on-demand convert standard model on-demand 
+- **Cloud**
+  - updated support for google models in text, image and video workflows  
+    *note*: requires google api key  
+  - [Google Veo](https://ai.google.dev/gemini-api/docs/veo) in *preview*, *fast* and *lite* variants  
+    workflows: *t2v, i2v*  
+  - [Google Omni](https://ai.google.dev/gemini-api/docs/omni) in *flash* variant  
+    workflows: *t2v, i2v*  
+  - [Google Nano Banana](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image) in *2* and *2 lite* and *pro* variants  
+    workflows: *caption*  
+  - [Google Gemini](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash) in *flash* and *pro* variants  
+    workflows: *caption, prompt-enhance*  
+  - added support for xai grok models  
+  - [X.AI Grok](https://x.ai/grok) in *3*, *3 fast*, *3 mini* and *3 mini fast* variants  
+    workflows: *caption, prompt-enhance*  
+    *note*: requires grok api key  
+- **Compute**
+  - cuda: update `torch==2.14.0` with `cuda==13.2`
+  - openvino: update `openvino==2026.3.1` with `torch==2.13.0`
+  - option to skip triton autotune and use default config for all triton kernels  
+    in *settings -> compute settings*  
+    *note*: this may improve initial generate time, but may also reduce performance on some models  
+  - rocm: update `rocm` script and add detailed `miopen` logging, thanks @resonantsky  
+  - new optional transformer hooks  
+    in *settings -> compute add-ons*  
+    *PAG: Perturbed attention guidance, PAB: Pyramid attention broadcast, FBC: First Block Cache, FC: Faster Cache, LS: Layer Skip, MC: Mag Cache, TS: TaylorSeer*  
+    *note*: compatibility of different methods varies across different models  
+  - update `numpy` and `scipy` frozen requirements as required by new compute drivers  
+    *note*: this may break compatibility with some legacy packages, so report any finidings  
+- **Other**
+  - video preview: TAESD support for **MiniMax**
+  - support `xai grok` for prompt enhance workflows  
+    *note*: requires grok api key  
+  - remove `/redocs` as `/docs` are primary api docs  
+  - rebuild docs site index  
+- **UI**
+  - some (light) re-styling of the *Default* theme
+  - add new *Tillerz-CleanDark* theme, thanks @Tillerz
+  - ability to filter samplers and upscalers, thanks @emecii
+- **Wiki/Docs**:
+  - new articles: *Attention, Modular-Pipelines*
+  - updated: *LoRA, MiniMax*
+- **Fixes**
+  - api: prompt enhance with vision
+  - autocomplete: skip disabled networks
+  - compile: keep model compiled state
+  - detailer: handling of stop/skip/pause
+  - framepack: correct device assignment, thanks @li-lizhe
+  - group offload: improve memory management
+  - installer: better handle git detached head
+  - json: handle file locks
+  - log: ansi color handling
+  - lora: cleanup tags
+  - lora: support transformer ref models
+  - lora: keep parsed network data through pipeline
+  - lucida: handle requirements
+  - lumina-dimoo: attention-kwargs, thanks @Anai-Guo
+  - metadata: fix wildcard info
+  - minimax: crop image to video aspect ratio
+  - modular: handle module with remote-code
+  - network: improve type/version lookup
+  - offline: honor offline mode for more models, thanks @ryanmeador
+  - openvino: optimize recompile checks and lora loading
+  - prompt enhance: cloud models use correct system prompt  
+  - prompt enhance: use init image for video
+  - prompt: cache checks when cfg changes
+  - prompt: unnecessary secondary prompt if same
+  - prompt: clean prompt after network parsing
+  - rife: cleanup dead code, thanks @Anai-Guo
+  - temp files: handle locking
+  - theme: fix circular imports changing theme to default
+  - todo: remove dead code, thanks @Anai-Guo
+  - ui: js fetch exception handling
+  - update: handle git errors gracefully
+  - vae: fetch scale factor from the model
+  - vdm scheduler: fix steps, thanks @zjn20030811
+  - xyz grid: apply bool values
+
+## Update for 2026-08-26
+
+### Highlights for 2026-08-26
 
 Time for a new release, *this is a large one*!
 Main focus is improving video workflows which also brings full support for new [MiniMax H3](https://vladmandic.github.io/sdnext-docs/MiniMax) and [LTXVideo-2.5](https://vladmandic.github.io/sdnext-docs/LTX)  
-and improves general video processing with flexible video upscaling, updated interpolation, etc.
+and improvements to general video processing with flexible video upscaling, updated interpolation, etc.
 
 *What else?*
 - [Detailer.next](https://vladmandic.github.io/sdnext-docs/Detailer) with new support for *vision-language models* and *per-class prompts*
@@ -1898,7 +2446,7 @@ And check out new **history** tab in the right panel, it now shows visualization
     *note*: this does not impact the actual image resolution, only the resolution at which detailer internally operates  
   - refactor reuse-seed and add functionality to all tabs  
   - refactor modernui js codebase  
-  - move zluda flash attenion to *Triton Flash attention* option  
+  - move zluda flash attenion to *Triton AMD Flash attention* option  
   - remove samplers filtering  
   - allow both flow-matching and discrete samplers for sdxl models  
   - cleanup command line parameters  

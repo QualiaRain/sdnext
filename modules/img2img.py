@@ -54,7 +54,6 @@ def process_batch(p, input_files, input_dir, output_dir, inpaint_mask_dir, args)
         window_size = p.batch_size
         btcrept = 1
         p.seed = [p.seed] * window_size # SBM MONKEYPATCH: Need to change processing to support a fixed seed value.
-        p.subseed = [p.subseed] * window_size # SBM MONKEYPATCH
         log.info(f"Process batch: inputs={len(image_files)} outputs={p.n_iter}x{len(image_files)} parallel={window_size}")
     else: # SBM Frame mode is off, standard operation of repeating same images with sequential seed.
         window_size = 1
@@ -86,7 +85,6 @@ def process_batch(p, input_files, input_dir, output_dir, inpaint_mask_dir, args)
                 p.all_prompts = None
                 p.all_negative_prompts = None
                 p.all_seeds = None
-                p.all_subseeds = None
                 log.debug(f'Process batch: image="{image_file}" prompt={prompt_type} i={i+1}/{len(image_files)}')
             except UnidentifiedImageError as e:
                 log.error(f'Process batch: image="{image_file}" {e}')
@@ -163,12 +161,11 @@ def img2img(id_task: str, state: str, mode: int,
             vae_type, tiling, hidiffusion,
             detailer_enabled, detailer_prompt, detailer_negative, detailer_steps, detailer_strength, detailer_resolution, detailer_classes,
             n_iter, batch_size,
-            guidance_name, guidance_scale, guidance_rescale, guidance_start, guidance_stop,
-            cfg_scale, cfg_image, cfg_rescale, cfg_true, cfg_adaptive, cfg_end,
+            cfg_name, cfg_scale, cfg_image, cfg_rescale, cfg_start, cfg_stop, cfg_true, cfg_adaptive,
             refiner_start,
             clip_skip,
             denoising_strength,
-            seed, subseed, subseed_strength, seed_resize_from_h, seed_resize_from_w,
+            seed,
             selected_scale_tab,
             height, width,
             scale_by,
@@ -194,6 +191,8 @@ def img2img(id_task: str, state: str, mode: int,
     if sampler_index is None:
         log.warning('Sampler: invalid')
         sampler_index = 0
+    if hr_sampler_index is None or hr_sampler_index == 'Same as primary':
+        hr_sampler_index = sampler_index
 
     mode = int(mode)
     image = None
@@ -253,21 +252,10 @@ def img2img(id_task: str, state: str, mode: int,
         negative_prompt=negative_prompt,
         styles=prompt_styles,
         seed=seed,
-        subseed=subseed,
-        subseed_strength=subseed_strength,
-        seed_resize_from_h=seed_resize_from_h,
-        seed_resize_from_w=seed_resize_from_w,
         sampler_name = processing.get_sampler_name(sampler_index, img=True),
         batch_size=batch_size,
         n_iter=n_iter,
         steps=steps,
-        guidance_name=guidance_name,
-        guidance_scale=guidance_scale,
-        guidance_rescale=guidance_rescale,
-        guidance_start=guidance_start,
-        guidance_stop=guidance_stop,
-        cfg_scale=cfg_scale,
-        cfg_end=cfg_end,
         clip_skip=clip_skip,
         width=width,
         height=height,
@@ -289,10 +277,6 @@ def img2img(id_task: str, state: str, mode: int,
         resize_context=resize_context,
         scale_by=scale_by,
         denoising_strength=denoising_strength,
-        cfg_image=cfg_image,
-        cfg_rescale=cfg_rescale,
-        cfg_true=cfg_true,
-        cfg_adaptive=cfg_adaptive,
         refiner_start=refiner_start,
         inpaint_full_res=inpaint_full_res != 0,
         inpaint_full_res_padding=inpaint_full_res_padding,
@@ -306,6 +290,15 @@ def img2img(id_task: str, state: str, mode: int,
         grading_shadows_tint=grading_shadows_tint, grading_highlights_tint=grading_highlights_tint, grading_split_tone_balance=grading_split_tone_balance,
         grading_vignette=grading_vignette, grading_grain=grading_grain,
         grading_lut_file=grading_lut_file.name if grading_lut_file is not None else '', grading_lut_strength=grading_lut_strength,
+        # guidance
+        cfg_name=cfg_name,
+        cfg_scale=cfg_scale,
+        cfg_image=cfg_image,
+        cfg_rescale=cfg_rescale,
+        cfg_start=cfg_start,
+        cfg_stop=cfg_stop,
+        cfg_true=cfg_true,
+        cfg_adaptive=cfg_adaptive,
         # refiner
         enable_hr=enable_hr,
         hr_denoising_strength=hr_denoising_strength,

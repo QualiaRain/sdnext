@@ -28,9 +28,10 @@ Algorithm:
    in a Cosmos 2.0 loader).
 5. Partition off sibling component keys (e.g. Anima's bundled ``llm_adapter.*``).
 6. Run the spec's converter if present (else pass through unchanged).
-7. Fetch ``<subfolder>/config.json`` from the base repo, instantiate via
-   ``cls.from_config``, ``load_state_dict(strict=False)``, validate, dtype-cast,
-   quantize, and offload-place.
+7. Fetch ``<subfolder>/config.json`` from the base repo, apply the spec's
+   ``infer_config`` overrides, instantiate via ``cls.from_config``,
+   ``load_state_dict(strict=False)``, validate, dtype-cast, quantize, and
+   offload-place.
 8. Repeat the build for each populated sibling (no converter, no quant by
    default; sibling weights are read raw from the bundled file).
 
@@ -44,7 +45,7 @@ import os
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, cast
 
 import huggingface_hub as hf
 import torch
@@ -134,6 +135,11 @@ class TransformerSpec:
     ``converter_handles_quant`` runs the converter before comfy_quant
     detection; such converters must translate marker/scale sidecar keys along
     with the weights. Float-oriented converters keep the default.
+
+    ``infer_config`` receives the transformer state dict after prefix strip and
+    sibling partition, before the converter, and returns config overrides
+    merged over the base repo config (e.g. ``num_layers`` of a depth-expanded
+    finetune).
     """
 
     cls: type
@@ -146,6 +152,7 @@ class TransformerSpec:
     acceptable_missing: tuple[str, ...] = DEFAULT_ACCEPTABLE_MISSING
     zero_init_missing: tuple[str, ...] = ()
     forbidden_markers: tuple[tuple[str, str], ...] = ()
+    infer_config: Callable[[dict], dict] | None = None
 
 
 def make_default_spec(cls: type) -> TransformerSpec:
@@ -178,7 +185,7 @@ def auto_pickup_converter(cls: type) -> Callable[[dict], dict] | None:
     fn = entry.get("checkpoint_mapping_fn")
     if fn is None or is_noop_converter(fn):
         return None
-    return fn
+    return cast('Callable[[dict], dict]', fn) # diffusers' mapping fns vary in signature (extra kwargs/config), all compatible at call sites
 
 
 def is_noop_converter(fn: Callable) -> bool:
@@ -296,6 +303,12 @@ def load(
 
     effective_dtype = dtype if dtype is not None else devices.dtype
     transformer_cfg = fetch_component_config(repo_id, spec.subfolder)
+    if spec.infer_config is not None:
+        inferred = spec.infer_config(transformer_sd)
+        overrides = {k: v for k, v in inferred.items() if transformer_cfg.get(k) != v}
+        if overrides:
+            log.info(f'Load model: type={spec.cls.__name__} native_transformer config={overrides}')
+            transformer_cfg = {**transformer_cfg, **overrides}
     transformer = build_component(
         component_name="transformer",
         state_dict=transformer_sd,
@@ -373,9 +386,7 @@ def drop_companion_keys(state_dict: dict, ignored_prefixes: tuple[str, ...], typ
         return state_dict
     counts = " ".join(f"{prefix.rstrip('.')}={count}" for prefix, count in dropped.items())
     if not kept:
-        raise ValueError(
-            f"Load model: type={type_name} native_transformer has no transformer keys ({counts})"
-        )
+        raise ValueError(f"Load model: type={type_name} native_transformer has no transformer keys ({counts})")
     log.info(f"Load model: type={type_name} native_transformer skipping bundled components: {counts}")
     return kept
 
@@ -588,6 +599,28 @@ def remap_comfy_quant(state_dict: dict, marked_names: set[str], defer_scales: bo
     return remapped
 
 
+def split_fused_rows(state_dict: dict, fused: str, suffix: str, targets: tuple[str, ...]) -> dict:
+    """Split ``<fused>.<suffix>`` of a row-stacked fused linear into ``<target>.<suffix>`` per target.
+
+    Tensors stacked on the fused weight's rows (weight, row-wise scale, bias)
+    are dim-0 sliced into equal parts; ``comfy_quant`` markers and other
+    sidecars (scalar scales) are copied to every target. Row slicing commutes
+    with convrot, which rotates along in_features.
+    """
+    value = state_dict[f"{fused}.{suffix}"]
+    weight = state_dict.get(f"{fused}.weight")
+    rows = weight.shape[0] if torch.is_tensor(weight) and weight.ndim >= 1 else None
+    row_stacked = (
+        suffix != "comfy_quant"
+        and torch.is_tensor(value) and value.ndim >= 1
+        and rows is not None and value.shape[0] == rows and rows % len(targets) == 0
+    )
+    if not row_stacked:
+        return {f"{target}.{suffix}": value for target in targets}
+    part = rows // len(targets)
+    return {f"{target}.{suffix}": value[i * part:(i + 1) * part] for i, target in enumerate(targets)}
+
+
 def unswizzle_block_scales(scales: torch.Tensor, rows: int, groups: int) -> torch.Tensor:
     """Invert the cuBLAS 2D block-scaling factor layout back to row-major
     ``[rows, groups]``, dropping the tile alignment padding.
@@ -626,8 +659,8 @@ def adopt_nvfp4_layer(sd: dict, name: str, linear: torch.nn.Linear, component_na
         )
     weight = sd.get(f"{name}.weight")
     scales = sd.pop(f"{name}.weight_scale", None)
-    global_scale = sd.pop(f"{name}.weight_scale_2", None)
-    if scales is None or global_scale is None:
+    scale_2 = sd.pop(f"{name}.weight_scale_2", None)
+    if scales is None or scale_2 is None:
         raise OverrideArchMismatch(
             f"Load model: transformer=native {component_name} comfy_quant marked module "
             f"{name!r} is missing nvfp4 weight_scale/weight_scale_2 tensors"
@@ -648,9 +681,10 @@ def adopt_nvfp4_layer(sd: dict, name: str, linear: torch.nn.Linear, component_na
         )
     weight = weight[:out_features, :packed_columns]
     weight = torch.bitwise_or(torch.bitwise_left_shift(torch.bitwise_and(weight, 15), 4), torch.bitwise_right_shift(weight, 4))
-    scales = unswizzle_block_scales(scales, out_features, groups)
+    scales = unswizzle_block_scales(scales, out_features, groups).unsqueeze(-1)
     sd[f"{name}.weight"] = weight
-    sd[f"{name}.scale"] = scales.to(torch.float32).mul_(global_scale.to(torch.float32)).unsqueeze(-1)
+    sd[f"{name}.scale"] = scales
+    sd[f"{name}.scale_2"] = scale_2
 
 
 def partition_siblings(
@@ -684,8 +718,9 @@ def partition_siblings(
 def fetch_component_config(repo_id: str, subfolder: str) -> dict:
     """Download and parse ``<subfolder>/config.json`` from the base repo."""
     relative_path = f"{subfolder}/config.json"
+    offline_args = {'local_files_only': True} if shared.opts.offline_mode else {}
     try:
-        local = hf.hf_hub_download(repo_id, filename=relative_path, cache_dir=shared.opts.diffusers_dir)
+        local = hf.hf_hub_download(repo_id, filename=relative_path, cache_dir=shared.opts.diffusers_dir, **offline_args)
     except Exception as e:
         log.error(f' path="{relative_path}" repo="{repo_id}" failed to download: {e}')
         raise RuntimeError('') from e
@@ -825,7 +860,7 @@ def build_component_prequantized(
     from accelerate import init_empty_weights
     from accelerate.utils import set_module_tensor_to_device
     from diffusers.utils import get_module_from_name
-    from sdnq.common import dtype_dict, check_torch_compile
+    from sdnq.common import sdnq_keys, dtype_dict, check_torch_compile
     from sdnq.kernel_wrappers import is_fp8_compile_supported
     from sdnq.quantizer import SDNQConfig, SDNQQuantizer
     from sdnq.dequantizer import SDNQDequantizer
@@ -865,6 +900,7 @@ def build_component_prequantized(
     full_precision_mm = [f"{name}.weight" for name in sorted(marked_names) if marker_meta[name].get("full_precision_matrix_mult")]
     quantization_config = SDNQConfig(
         weights_dtype=weights_dtype,
+        scale_dtype="float8_e4m3fn" if is_nvfp4 else None,
         quantized_matmul_dtype=matmul_dtype,
         group_size=NVFP4_GROUP_SIZE if is_nvfp4 else -1,
         use_quantized_matmul=(shared.opts.sdnq_quantize_matmul_mode != "disabled"),
@@ -911,7 +947,11 @@ def build_component_prequantized(
             original_shape=layer_shape,
             original_stride=(linear.in_features, 1),
             quantized_weight_shape=torch.Size((linear.out_features, linear.in_features // NVFP4_GROUP_SIZE, NVFP4_GROUP_SIZE)) if is_nvfp4 else layer_shape,
+            quantized_scale_shape=None,
+            quantized_zero_point_shape=None,
             weights_dtype=weights_dtype,
+            scale_dtype="float8_e4m3fn" if is_nvfp4 else None,
+            zero_point_dtype=None,
             quantized_matmul_dtype=matmul_dtype,
             hadamard_group_size=hadamard_group_size,
             group_size=NVFP4_GROUP_SIZE if is_nvfp4 else -1,
@@ -923,13 +963,15 @@ def build_component_prequantized(
             use_stochastic_rounding=False,
             use_hadamard=use_hadamard,
             use_codebook=False,
+            use_codebook_scale=False,
             layer_class_name="Linear",
         )
         wrapped = get_sdnq_wrapper_class(linear, dequant_forward)
-        wrapped.scale = torch.nn.Parameter(torch.empty((1, 1), dtype=torch.float32, device="meta"), requires_grad=False)
-        wrapped.zero_point = None
-        wrapped.svd_up = None
-        wrapped.svd_down = None
+        wrapped.scale = torch.nn.Parameter(torch.empty((1, 1), dtype=torch.float8_e4m3fn if is_nvfp4 else torch.float32, device="meta"), requires_grad=False)
+        wrapped.scale_2 = torch.nn.Parameter(torch.empty((1,), dtype=torch.float32, device="meta"), requires_grad=False) if is_nvfp4 else None
+        for key in sdnq_keys:
+            if key not in {"weight", "scale", "scale_2"}:
+                setattr(wrapped, key, None)
         setattr(parent, child, wrapped)
 
     target_device = (

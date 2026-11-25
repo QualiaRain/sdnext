@@ -5,7 +5,7 @@ import time
 import torch
 import transformers
 import diffusers
-from modules import shared, errors, sd_models, sd_checkpoint, model_quant, devices, sd_hijack_te, sd_hijack_vae, modular_load
+from modules import shared, errors, sd_models, sd_checkpoint, model_quant, devices, modular_load, sd_hijack_te, sd_hijack_vae, sd_hijack_modular
 from modules.logger import log
 from modules.video_models import models_def, video_utils, video_overrides, video_cache
 from pipelines import generic
@@ -50,6 +50,10 @@ def load_custom(model_name: str):
         from modules.video_models.google_veo import load_veo
         pipe = load_veo(model_name)
         return pipe
+    if 'gemini-omni' in model_name:
+        from modules.video_models.google_omni import load_omni
+        pipe = load_omni(model_name)
+        return pipe
     return None
 
 
@@ -75,6 +79,7 @@ def load_model(selected: models_def.Model):
         loaded_model = None
     if loaded_model == selected.name:
         return ''
+    loaded_model = None
     if shared.sd_loaded:
         sd_models.unload_model_weights()
 
@@ -153,9 +158,10 @@ def load_model(selected: models_def.Model):
         log.error(f'video load: module=pipe repo="{selected.repo}" cls={selected.repo_cls.__name__} {e}')
         errors.display(e, 'video')
 
-    if shared.sd_model is None:
+    if not shared.sd_loaded:
         msg = f'Load video: model="{selected.name}" failed'
         log.error(msg)
+        shared.state.end(jobid)
         return msg
 
     t1 = time.time()
@@ -196,7 +202,7 @@ def load_model(selected: models_def.Model):
     shared.sd_model = model_quant.do_post_load_quant(shared.sd_model, allow=False)
     sd_models.set_diffuser_offload(shared.sd_model)
     if modular_load.is_modular(shared.sd_model):
-        modular_load.install_state_hook(shared.sd_model)
+        sd_hijack_modular.install_state_hook(shared.sd_model)
 
     loaded_model = selected.name
     msg = f'Load video: cls={shared.sd_model.__class__.__name__} model="{selected.name}" time={t1-t0:.2f}'
@@ -217,7 +223,8 @@ def load_upscale_vae():
 
     repo_id = 'spacepxl/Wan2.1-VAE-upscale2x'
     subfolder = "diffusers/Wan2.1_VAE_upscale2x_imageonly_real_v1"
-    vae_decode = diffusers.AutoencoderKLWan.from_pretrained(repo_id, subfolder=subfolder, cache_dir=shared.opts.hfcache_dir)
+    offline_args = {'local_files_only': True} if shared.opts.offline_mode else {}
+    vae_decode = diffusers.AutoencoderKLWan.from_pretrained(repo_id, subfolder=subfolder, cache_dir=shared.opts.hfcache_dir, **offline_args)
     vae_decode.requires_grad_(False)
     vae_decode = vae_decode.to(device=devices.device, dtype=devices.dtype)
     vae_decode.eval()

@@ -112,6 +112,8 @@ class XYZGridScript(scripts_manager.Script):
         fill_z_button.click(fn=fill, inputs=[z_type, csv_mode], outputs=[z_values, z_values_dropdown])
 
         def select_axis(axis_type, axis_values, axis_values_dropdown, csv_mode):
+            if axis_type is None:
+                return gr.update(), gr.update(), gr.update()
             choices = self.current_axis_options[axis_type].choices
             has_choices = choices is not None
             current_values = axis_values
@@ -125,7 +127,8 @@ class XYZGridScript(scripts_manager.Script):
                     current_dropdown_values = [restore_comma(x.strip()) for x in re_plain_comma.split(axis_values) if x]
                     current_dropdown_values = list(filter(lambda x: x in choices, current_dropdown_values))
 
-            return (gr.Button.update(visible=has_choices), gr.Textbox.update(visible=not has_choices or csv_mode, value=current_values),
+            return (gr.Button.update(visible=has_choices),
+                    gr.Textbox.update(visible=not has_choices or csv_mode, value=current_values),
                     gr.update(choices=choices if has_choices else None, visible=has_choices and not csv_mode, value=current_dropdown_values))
 
         x_type.change(fn=select_axis, inputs=[x_type, x_values, x_values_dropdown, csv_mode], outputs=[fill_x_button, x_values, x_values_dropdown])
@@ -236,13 +239,18 @@ class XYZGridScript(scripts_manager.Script):
                 valslist = [x for x in valslist_ext if x not in valslist]
             elif opt.type == str_permutations: # pylint: disable=comparison-with-callable
                 valslist = list(permutations(valslist))
-            valslist = [opt.type(x) for x in valslist]
+            elif opt.type == bool:
+                valslist = [str(x).strip().lower() in ['true', 't', 'yes', 'y', '1', 'on'] for x in valslist]
+            else:
+                valslist = [opt.type(x) for x in valslist]
             # Confirm options are valid before starting
             if opt.confirm:
                 opt.confirm(p, valslist)
             return valslist
 
         def parse_axis(x_type, x_values, x_values_dropdown):
+            if x_type is None:
+                x_type = 0
             x_opt = None
             if isinstance(x_type, str):
                 x_opt = [o for o in self.current_axis_options if o.label.lower() == x_type.lower()]
@@ -274,7 +282,7 @@ class XYZGridScript(scripts_manager.Script):
         Image.MAX_IMAGE_PIXELS = None # disable check in Pillow and rely on check below to allow large custom image sizes
 
         def fix_axis_seeds(axis_opt, axis_list):
-            if axis_opt.label in ['[Param] Seed', '[Param] Variation seed']:
+            if axis_opt.label == '[Param] Seed':
                 return [int(random.randrange(4294967294)) if val is None or val == '' or val == -1 else val for val in axis_list]
             else:
                 return axis_list
@@ -347,13 +355,13 @@ class XYZGridScript(scripts_manager.Script):
                     return processing.Processed(p, [], p.seed, ""), 0
             p.xyz = True
             pc = copy(p)
+            pc.network_data = None
             pc.override_settings_restore_afterwards = False
             pc.styles = pc.styles[:]
             if no_fixed_seeds:
                 pc.seed = -1
                 processing.fix_seed(pc)
                 pc.all_seeds = None
-                pc.all_subseeds = None
             x_opt.apply(pc, x, xs)
             y_opt.apply(pc, y, ys)
             z_opt.apply(pc, z, zs)
@@ -373,24 +381,26 @@ class XYZGridScript(scripts_manager.Script):
                 if x_opt.label != 'Nothing':
                     pc.extra_generation_params["X Type"] = x_opt.label
                     pc.extra_generation_params["X Values"] = x_values
-                    if x_opt.label in ["[Param] Seed", "[Param] Variation seed"] and not no_fixed_seeds:
+                    if x_opt.label == "[Param] Seed" and not no_fixed_seeds:
                         pc.extra_generation_params["Fixed X Values"] = ", ".join([str(x) for x in xs])
                 if y_opt.label != 'Nothing':
                     pc.extra_generation_params["Y Type"] = y_opt.label
                     pc.extra_generation_params["Y Values"] = y_values
-                    if y_opt.label in ["[Param] Seed", "[Param] Variation seed"] and not no_fixed_seeds:
+                    if y_opt.label == "[Param] Seed" and not no_fixed_seeds:
                         pc.extra_generation_params["Fixed Y Values"] = ", ".join([str(y) for y in ys])
-                info = processing.create_infotext(pc, pc.all_prompts, pc.all_seeds, pc.all_subseeds, grid=f'{len(xs)}x{len(ys)}')
+                info = processing.create_infotext(pc, pc.all_prompts, pc.all_seeds, grid=f'{len(xs)}x{len(ys)}')
                 grid_infotext.append(info)
+
             if ix == 0 and iy == 0 and iz == 0 and len(zs) > 1: # create main grid info text
                 pc.extra_generation_params = copy(pc.extra_generation_params)
                 if z_opt.label != 'Nothing':
                     pc.extra_generation_params["Z Type"] = z_opt.label
                     pc.extra_generation_params["Z Values"] = z_values
-                    if z_opt.label in ["[Param] Seed", "[Param] Variation seed"] and not no_fixed_seeds:
+                    if z_opt.label == "[Param] Seed" and not no_fixed_seeds:
                         pc.extra_generation_params["Fixed Z Values"] = ", ".join([str(z) for z in zs])
-                info = processing.create_infotext(pc, pc.all_prompts, pc.all_seeds, pc.all_subseeds, grid=f'{len(zs)}x{len(xs)}x{len(ys)}')
+                info = processing.create_infotext(pc, pc.all_prompts, pc.all_seeds, grid=f'{len(zs)}x{len(xs)}x{len(ys)}')
                 grid_infotext.insert(0, info)
+
             t1 = time.time()
             return processed, t1-t0
 

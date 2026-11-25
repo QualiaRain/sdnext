@@ -9,7 +9,7 @@ import torch
 import transformers
 import transformers.dynamic_module_utils
 from PIL import Image
-from modules import shared, devices, errors, model_quant, sd_models, sd_models_compile
+from modules import shared, devices, errors, model_quant, sd_models, sd_models_compile, sd_hijack_te
 from modules.sd_offload_aux import register_aux, deregister_aux, move_aux_to_gpu, offload_aux
 from modules.logger import log, console
 from modules.caption import vqa_detection, helpers, toriigate
@@ -142,6 +142,12 @@ def is_thinking_model(model_name: str) -> bool:
         'qwen 3.5',  # Qwen3.5 native thinking (display names)
     ]
     return any(indicator in model_lower for indicator in thinking_indicators)
+
+
+def uses_qwen_handler(repo: str) -> bool:
+    """Check if the repo is dispatched to the Qwen VL handler."""
+    repo_lower = repo.lower()
+    return 'qwen' in repo_lower or 'torii' in repo_lower or 'mimo' in repo_lower
 
 
 def check_linear_attention(model):
@@ -424,7 +430,7 @@ class VQA:
             repo_lower = repo.lower()
             if 'mistral' in repo_lower:
                 self._load_mistral(repo)
-            elif 'qwen' in repo_lower or 'torii' in repo_lower or 'mimo' in repo_lower:
+            elif uses_qwen_handler(repo):
                 self._load_qwen(repo)
             elif 'gemma' in repo_lower and 'pali' not in repo_lower:
                 self._load_gemma(repo)
@@ -1436,6 +1442,7 @@ class VQA:
         response = return_dict["prediction"]  # the text format answer
         return response
 
+    @sd_hijack_te.with_compile_stance('LLM')
     def caption(
         self,
         question: str = "",
@@ -1477,11 +1484,8 @@ class VQA:
             image = image[0] if len(image) > 0 else None
         if isinstance(image, dict) and 'name' in image:
             image = Image.open(image['name'])
-        if isinstance(image, Image.Image):
-            if image.width > 768 or image.height > 768:
-                image.thumbnail((768, 768), Image.Resampling.LANCZOS)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
+        if isinstance(image, Image.Image) and image.mode != 'RGB':
+            image = image.convert('RGB')
         if image is None:
             log.error(f'LLM: model="{model_name}" error="No input image provided"')
             self._generation_overrides = None
@@ -1514,12 +1518,16 @@ class VQA:
         if model_name is None:
             log.error(f'LLM: type=vlm model="{model_name}" no model selected')
             shared.state.end(jobid)
-            return ''
+            return 'Error: No model selected.'
         vqa_model = get_vlm_repo(model_name)
         if vqa_model == model_name and model_name not in vlm_models.values():
             log.error(f'LLM: type=vlm model="{model_name}" unknown')
             shared.state.end(jobid)
-            return ''
+            return f'Error: Unknown model "{model_name}".'
+        if isinstance(image, str):
+            image = Image.open(image)
+        if isinstance(image, Image.Image) and not uses_qwen_handler(vqa_model) and (image.width > 768 or image.height > 768):  # Qwen processors resize to their own max_pixels budget
+            image.thumbnail((768, 768), Image.Resampling.LANCZOS)
         if self.model is None or self.loaded != vqa_model:
             from modules import modelloader
             modelloader.hf_login()
@@ -1560,7 +1568,7 @@ class VQA:
             elif 'mistral' in vqa_model.lower():
                 handler = 'mistral'
                 answer = self._mistral(question, image, vqa_model, system_prompt, model_name, prefill, thinking_mode)
-            elif 'qwen' in vqa_model.lower() or 'torii' in vqa_model.lower() or 'mimo' in vqa_model.lower():
+            elif uses_qwen_handler(vqa_model):
                 handler = 'qwen'
                 answer = self._qwen(question, image, vqa_model, system_prompt, model_name, prefill, thinking_mode)
             elif 'smol' in vqa_model.lower():
@@ -1597,12 +1605,19 @@ class VQA:
                 handler = 'gemini'
                 gen_kwargs = get_kwargs(self.model)
                 from modules.caption import gemini
-                answer = gemini.predict(question, image, vqa_model, system_prompt, model_name, prefill, thinking_mode, gen_kwargs)
+                answer = gemini.predict(question, image, vqa_model, system_prompt, prefill, thinking_mode, gen_kwargs)
+            elif 'grok' in vqa_model.lower():
+                handler = 'grok'
+                gen_kwargs = get_kwargs(self.model)
+                from modules.caption import grok
+                answer = grok.predict(question, image, vqa_model, system_prompt, prefill, thinking_mode, gen_kwargs)
             else:
-                answer = 'unknown model'
+                raise ValueError(f'no handler for model repo "{vqa_model}"')
         except Exception as e:
             errors.display(e, 'VQA')
-            answer = 'error'
+            self._generation_overrides = None
+            shared.state.end(jobid)
+            return f'Error: {type(e).__name__}: {e}'
         finally:
             sd_models.set_huggingface_options(quiet=True)
             if self.model is not None:
@@ -1712,6 +1727,9 @@ class VQA:
                             annotated_path = os.path.splitext(file)[0] + "_annotated.png"
                             self.last_annotated_image.save(annotated_path)
                         prompts.append(result)
+                        if result.startswith('Error:'):
+                            log.error(f'LLM batch: file="{file}" {result}')
+                            continue
                         if save_txt:
                             writer_txt.add(file, result)
                         if save_json:

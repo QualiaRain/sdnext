@@ -27,8 +27,9 @@ def check(force=False):
 
 
 def install_nunchaku(force=False):
+    from modules import devices
     if not force:
-        from modules import devices, shared
+        from modules import shared
         if devices.backend is None:
             return False # too early
         if shared.cmd_opts.reinstall:
@@ -45,8 +46,8 @@ def install_nunchaku(force=False):
         if arch not in ['linux', 'windows']:
             log.error(f'Nunchaku: platform={arch} unsupported')
             return False
-        if not force and devices.backend not in ['cuda']: # ty: ignore
-            log.error(f'Nunchaku: backend={devices.backend} unsupported') # ty: ignore
+        if not force and devices.backend not in ['cuda']:
+            log.error(f'Nunchaku: backend={devices.backend} unsupported')
             return False
 
         url = os.environ.get('NUNCHAKU_COMMAND', None)

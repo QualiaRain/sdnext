@@ -10,12 +10,10 @@ import base64
 import urllib.parse
 import threading
 from types import SimpleNamespace
-from pathlib import Path
 from html.parser import HTMLParser
 from collections import OrderedDict
 import gradio as gr
 from PIL import Image
-from fastapi.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 from modules import paths, shared, devices, files_cache, errors, infotext, ui_symbols, ui_components, modelstats
 from modules.logger import log
@@ -26,7 +24,8 @@ allowed_dirs = []
 refresh_time = 0
 extra_pages = shared.extra_networks
 debug = log.trace if os.environ.get('SD_EN_DEBUG', None) is not None else lambda *args, **kwargs: None
-debug('Trace: EN')
+
+card_empty = '<div class="card"></div>'
 card_full = '''
     <div class='card' onclick={card_click} title='{name}' data-page='{page}' data-name='{name}' data-filename='{filename}' data-short='{short}' data-tags='{tags}' data-mtime='{mtime}' data-size='{size}' data-search='{search}' data-version='{version}' style='--data-color: {color}'>
         <div class='overlay'>
@@ -57,21 +56,19 @@ preview_map = None
 def init_api():
 
     def get_thumb(filename: str = ""):
+        from modules.api import helpers
         if os.path.join('ui', 'assets') not in allowed_dirs:
             allowed_dirs.append(os.path.join('ui', 'assets'))
         if filename is None or len(filename) == 0:
             return JSONResponse({ "error": "no filename" }, status_code=400)
-        if not any(Path(folder).absolute() in Path(filename).absolute().parents for folder in allowed_dirs):
-            raise HTTPException(status_code=403, detail=f"file {filename}: must be in one of allowed directories")
-        if not os.path.exists(filename) or not os.path.isfile(filename) or os.path.getsize(filename) == 0:
+        fn = helpers.validate_path(filename, allowed_dirs)
+        if not os.path.exists(fn) or not os.path.isfile(fn) or os.path.getsize(fn) == 0:
             return FileResponse('ui/assets/missing.png', headers={"Accept-Ranges": "bytes"})
-        if filename.startswith('html/') or filename.startswith('models/') or filename.startswith('data/') or filename.startswith('ui/'):
-            return FileResponse(filename, headers={"Accept-Ranges": "bytes"})
-        if not any(Path(folder).absolute() in Path(filename).absolute().parents for folder in allowed_dirs):
-            return JSONResponse({ "error": f"file {filename}: must be in one of allowed directories" }, status_code=403)
-        if os.path.splitext(filename)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-            return JSONResponse({"error": f"file {filename}: not an image file"}, status_code=403)
-        return FileResponse(filename, headers={"Accept-Ranges": "bytes"})
+        if fn.startswith('html/') or fn.startswith('models/') or fn.startswith('data/') or fn.startswith('ui/'):
+            return FileResponse(fn, headers={"Accept-Ranges": "bytes"})
+        if os.path.splitext(fn)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+            return JSONResponse({"error": f"file {fn}: not an image file"}, status_code=403)
+        return FileResponse(fn, headers={"Accept-Ranges": "bytes"})
 
     def get_metadata(page: str = "", item: str = ""):
         page_dict = next(iter([x for x in shared.extra_networks if x.name.lower() == page.lower()]), None)
@@ -210,6 +207,14 @@ class ExtraNetworksPage:
                 filename = ref
             else:
                 filename = 'ui/assets/missing.png'
+        if os.path.isabs(filename):
+            working_dir = os.path.abspath(os.getcwd())
+            absolute_filename = os.path.abspath(filename)
+            try:
+                if os.path.commonpath((working_dir, absolute_filename)) == working_dir:
+                    filename = os.path.relpath(absolute_filename, working_dir)
+            except ValueError:
+                pass
         quoted_filename = urllib.parse.quote(filename.replace('\\', '/'))
         preview = f"{shared.opts.subpath}/sdapi/v1/network/thumb?filename={quoted_filename}"
         return preview
@@ -415,6 +420,16 @@ class ExtraNetworksPage:
     def allowed_directories_for_previews(self):
         return []
 
+    def get_title(self, item):
+        remove_suffix = ['.safetensors', '.ckpt', 'diffusers']
+        basename = os.path.basename(item["name"])
+        for suffix in remove_suffix:
+            if basename.endswith(suffix):
+                basename = basename[: -len(suffix)]
+                break
+        title = basename.replace('_', ' ').strip()
+        return title
+
     def create_html(self, item, tabname: str):
         def random_bright_color():
             r = random.randint(100, 255)
@@ -435,7 +450,7 @@ class ExtraNetworksPage:
                 # "tabname": tabname,
                 "page": self.name,
                 "name": html.escape(item.get('name', ''), quote=True),
-                "title": os.path.basename(item["name"].replace('_', ' ')),
+                "title": self.get_title(item),
                 "filename": html.escape(item.get('filename', ''), quote=True),
                 "short": os.path.splitext(os.path.basename(item.get('filename', '')))[0],
                 "tags": tags,
@@ -585,6 +600,9 @@ class ExtraNetworksPage:
             fn = os.path.join(path, 'model_index.json')
             if not data and os.path.exists(fn):
                 data = shared.readfile(fn, silent=True, as_type="dict")
+            fn = os.path.join(path, 'modular_model_index.json')
+            if not data and os.path.exists(fn):
+                data = shared.readfile(fn, silent=True, as_type="dict")
             t1 = time.time()
             self.info_time += t1-t0
         return data
@@ -601,8 +619,6 @@ def register_page(page: ExtraNetworksPage):
         debug(f'EN register-page: {page} already registered')
         return
     shared.extra_networks.append(page)
-    # allowed_dirs.clear()
-    # for pg in shared.extra_networks:
     for folder in page.allowed_directories_for_previews():
         if folder not in allowed_dirs:
             allowed_dirs.append(os.path.abspath(folder))
@@ -1055,6 +1071,8 @@ def create_ui(container, button_parent: gr.Button, tabname: str, skip_indexing =
         ]
 
     def ui_refresh_click(title):
+        ExtraNetworksPage.find_preview.cache_clear()
+        ExtraNetworksPage.find_preview_file.cache_clear()
         pages = []
         for page in get_pages():
             if page.title != title:

@@ -29,7 +29,7 @@ class Api:
         self.router = APIRouter()
         if shared.cmd_opts.docs:
             docs.create_docs(app)
-            docs.create_redocs(app)
+            # docs.create_redocs(app)
         self.app = app
         self.queue_lock = queue_lock
         self.generate = generate.APIGenerate(queue_lock)
@@ -41,8 +41,10 @@ class Api:
         self.img2imgapi = self.generate.post_img2img
 
     def register(self):
-        # fetch js/css
+        # fetch js/css/html
         self.add_api_route("/js", server.get_js, methods=["GET"], auth=False, tags=["Base"])
+        self.add_api_route("/html", server.get_html_manifest, methods=["GET"], auth=False, tags=["Base"])
+        self.add_api_route("/html/{path:path}", server.get_html, methods=["GET"], auth=False, tags=["Base"])
         self.add_api_route("/manifest", server.get_manifest, methods=["GET"], auth=False, tags=["Base"])
         self.add_api_route("/icon", server.get_icon, methods=["GET"], auth=False, tags=["Base"])
 
@@ -129,6 +131,8 @@ class Api:
         self.add_api_route("/sdapi/v1/latents", endpoints.post_latent_history, methods=["POST"], response_model=int, tags=["Functional"])
         self.add_api_route("/sdapi/v1/modules", endpoints.get_modules, methods=["GET"], tags=["Functional"])
         self.add_api_route("/sdapi/v1/sampler", endpoints.get_sampler, methods=["GET"], response_model=dict, tags=["Functional"])
+        self.add_api_route("/sdapi/v1/watermark", endpoints.post_watermark, methods=["POST"], tags=["Functional"])
+        self.add_api_route("/sdapi/v1/watermark", endpoints.get_watermark, methods=["GET"], tags=["Functional"])
 
         # options api
         from modules.api import options
@@ -167,6 +171,13 @@ class Api:
         from modules.rembg import rembg_api
         rembg_api.register_api(self)
 
+        from modules.api import scheduler as scheduler_api
+        scheduler_api.register_api(self)
+
+        # framepack api
+        from modules.framepack import framepack_api
+        framepack_api.register_api(self)
+
         # hide trailing-slash duplicates from OpenAPI schema
         from fastapi.routing import APIRoute
         route_paths = {r.path for r in self.app.routes if hasattr(r, 'path')}
@@ -177,6 +188,11 @@ class Api:
         # upload api
         from modules.api import upload
         upload.register_api()
+
+        # rate limiter
+        from modules.api.validate import init_limiter
+        init_limiter()
+
 
     def add_api_route(self, path: str, fn, auth: bool = True, **kwargs):
         if auth and self.credentials:
@@ -205,7 +221,7 @@ class Api:
             self.add_auth(host=request.client.host, user=credentials.username if credentials else None, method="none")
             return True
         if (credentials is not None) and (credentials.username in self.credentials):
-            if compare_digest(credentials.password, self.credentials[credentials.username]): # client user + encoded password
+            if compare_digest(credentials.password.encode('utf-8'), self.credentials[credentials.username].encode('utf-8')): # client user + encoded password; str compare_digest rejects non-ascii
                 self.add_auth(host=request.client.host, user=credentials.username if credentials else None, method="digest")
                 return True
             if hasattr(self.app, 'tokens') and (self.app.tokens is not None): # client sends token as password

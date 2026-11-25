@@ -409,7 +409,7 @@ class UltimateSDUpscaleScript(scripts_manager.Script):
     def title(self):
         return "SD Ultimate Upscale"
 
-    def show(self, is_img2img):
+    def show(self, is_img2img): # pylint: disable=unused-argument
         return True
 
     def ui(self, is_img2img): # pylint: disable=unused-argument
@@ -483,7 +483,6 @@ class UltimateSDUpscaleScript(scripts_manager.Script):
         p.do_not_save_grid = True
         p.do_not_save_samples = True
         p.inpaint_full_res = False
-        p.inpainting_fill = 1
         p.n_iter = 1
         p.batch_size = 1
 

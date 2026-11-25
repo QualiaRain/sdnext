@@ -7,38 +7,57 @@ request_cost = {
     "/file": 0,
     "/internal/progress": 0,
     "/run/predict": 0,
+    "/sdapi/v1/control": 5,
+    "/sdapi/v1/img2img": 5,
+    "/sdapi/v1/txt2img": 5,
+    "/sdapi/v1/video": 5,
     "/sdapi/v1/browser/thumb": 0,
     "/sdapi/v1/network/thumb": 0,
-    "/sdapi/v1/txt2img": 5,
-    "/sdapi/v1/img2img": 5,
-    "/sdapi/v1/control": 5,
-    "/sdapi/v1/video": 5,
+    "/sdapi/v1/scheduler": 0,
+    "/sdapi/v1/scheduler/tasks": 0,
+    "/sdapi/v1/scheduler/tasks/{task_id}/images/{image_index}": 0,
+    "/sdapi/v1/scheduler/tasks/{task_id}/media/{media_index}": 0,
 }
 log_cost = {
     "/.well-known/appspecific/com.chrome.devtools.json": -1,
-    "/info": -1,
-    "/file": -1,
-    "/token": -1,
-    "/theme.css": -1,
-    "/sdapi/v1/browser/thumb": -1,
-    "/sdapi/v1/network/thumb": -1,
-    "/run/predict": -1,
-    "/queue/join": -1,
-    "/internal/progress": -1,
-    "/sdapi/v1/version": -1,
-    "/sdapi/v1/log": -1,
-    "/sdapi/v1/torch": -1,
+    "/sdapi/v1/checkpoint": -1,
+    "/sdapi/v1/file": 1,
+    "/sdapi/v1/gpu-smi": -1,
     "/sdapi/v1/gpu": -1,
+    "/sdapi/v1/loaded-loras": -1,
+    "/sdapi/v1/log": -1,
     "/sdapi/v1/memory": -1,
     "/sdapi/v1/platform": -1,
-    "/sdapi/v1/checkpoint": -1,
-    "/sdapi/v1/loaded-loras": -1,
-    "/sdapi/v1/gpu-smi": -1,
-    "/sdapi/v1/status": 60,
     "/sdapi/v1/progress": 60,
+    "/sdapi/v1/start": -1,
+    "/sdapi/v1/status": 60,
+    "/sdapi/v1/torch": -1,
+    "/sdapi/v1/version": -1,
+    "/sdapi/v1/browser/thumb": -1,
+    "/sdapi/v1/network/thumb": -1,
+    "/sdapi/v1/scheduler": -1,
+    "/sdapi/v1/scheduler/tasks": -1,
+    "/sdapi/v1/scheduler/tasks/{task_id}/images/{image_index}": -1,
+    "/sdapi/v1/scheduler/tasks/{task_id}/media/{media_index}": -1,
+    "/js": -1,
+    "/html/templates/{file}": -1,
+    "/file": -1,
+    "/info": -1,
+    "/icon": -1,
+    "/internal/progress": -1,
+    "/queue/join": -1,
+    "/run/predict": -1,
+    "/theme.css": -1,
+    "/token": -1,
 }
 log_exclude_suffix = ['.css', '.js', '.ico', '.svg']
 log_exclude_prefix = ['/assets']
+
+
+def get_cost(costs, api, route=None):
+    if api in costs:
+        return costs[api]
+    return costs.get(route, 1) # route template such as /sdapi/v2/jobs/{job_id}, for paths that carry ids
 
 
 class Limiter():
@@ -63,10 +82,10 @@ class Limiter():
             if v > 1:
                 log.trace(f'API stats: {k}={v}')
 
-    def check_request(self, client: str, api: str, quiet: bool = False):
+    def check_request(self, client: str, api: str, quiet: bool = False, route: str | None = None):
         if self.request_limit <= 0:
             return True
-        cost = request_cost.get(api, 1)
+        cost = get_cost(request_cost, api, route)
         if cost < 0:
             return False
         status = self.request_strategy.hit(self.request_limiter, client, api, cost=cost)
@@ -76,7 +95,7 @@ class Limiter():
             raise HTTPException(status_code=429, detail=f"{client}:{api}: rate limit exceeded")
         return status
 
-    def check_log(self, client: str, api: str):
+    def check_log(self, client: str, api: str, route: str | None = None):
         if self.debug:
             return True
         if self.log_limit < 0:
@@ -85,7 +104,7 @@ class Limiter():
             return False
         if any(api.startswith(s) for s in log_exclude_prefix):
             return False
-        cost = log_cost.get(api, 1)
+        cost = get_cost(log_cost, api, route)
         if cost < 0:
             return False
         status = self.log_strategy.hit(self.log_limiter, client, api, cost=cost)
@@ -99,23 +118,32 @@ def get_api_stats():
     limiter.stats()
 
 
-def validate_request(client, endpoint):
+def init_limiter():
     global limiter # pylint: disable=global-statement
     from modules.shared import opts, cmd_opts
     if opts.server_rate_limit != limiter.request_limit:
         limiter = Limiter(opts.server_rate_limit, cmd_opts.subpath, cmd_opts.profile)
-    api = re.match(r"^[^?#&=]+", endpoint).group(0)
 
-    if (limiter.subpath is not None) and (len(limiter.subpath) > 0) and api.startswith(limiter.subpath): # strip subpath from api for rate limiting
-        api = api[len(limiter.subpath):]
+
+def strip_subpath(path: str) -> str:
+    if limiter.subpath and path.startswith(limiter.subpath):
+        return path[len(limiter.subpath):]
+    return path
+
+
+def validate_request(client, endpoint, route: str | None = None):
+    global limiter # pylint: disable=global-statement
+    from modules.shared import opts, cmd_opts
+    if opts.server_rate_limit != limiter.request_limit:
+        limiter = Limiter(opts.server_rate_limit, cmd_opts.subpath, cmd_opts.profile)
+    api = strip_subpath(re.match(r"^[^?#&=]+", endpoint).group(0))
     key = f"{client}:{api}"
     if key not in limiter.summary:
         limiter.summary[key] = 0
     limiter.summary[key] += 1
-    return limiter.check_request(client, api)
+    return limiter.check_request(client, api, route=strip_subpath(route) if route else None)
 
-def validate_log(client, endpoint):
-    api = re.match(r"^[^?#&=]+", endpoint).group(0)
-    if (limiter.subpath is not None) and (len(limiter.subpath) > 0) and api.startswith(limiter.subpath): # strip subpath from api for logging
-        api = api[len(limiter.subpath):]
-    return limiter.check_log(client, api)
+
+def validate_log(client, endpoint, route: str | None = None):
+    api = strip_subpath(re.match(r"^[^?#&=]+", endpoint).group(0))
+    return limiter.check_log(client, api, route=strip_subpath(route) if route else None)
