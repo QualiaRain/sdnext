@@ -13,6 +13,7 @@ Usage:
 transcript folders that hold journal.jsonl (or the journal files themselves).
 """
 import os
+import re
 import sys
 import json
 import argparse
@@ -26,14 +27,19 @@ def load_journal(path):
         return started, results
     with open(path, encoding='utf8') as f:
         for line in f:
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if entry.get('type') == 'started':
-                started[entry['key']] = entry.get('label', '')
-            elif entry.get('type') == 'result':
-                results[entry['key']] = entry.get('result')
+            # a write cut short (for example by a full disk) leaves a partial entry with the next one appended to it
+            for piece in ['{"type"' + x for x in line.split('{"type"')[1:]]:
+                try:
+                    entry = json.loads(piece)
+                except ValueError:
+                    key = re.search(r'"key":"([^"]+)"', piece)
+                    if key and piece.startswith('{"type":"result"'): # keep the verdicts that survived
+                        results[key.group(1)] = {'results': [{'id': i, 'verdict': v, 'notes': 'partial journal entry'} for i, v in re.findall(r'\{"id":"([^"]+)","verdict":"([^"]+)"', piece)]}
+                    continue
+                if entry.get('type') == 'started':
+                    started[entry['key']] = entry.get('label', '')
+                elif entry.get('type') == 'result':
+                    results[entry['key']] = entry.get('result')
     by_label = {}
     for key, label in started.items():
         by_label[label] = results.get(key, 'running')
