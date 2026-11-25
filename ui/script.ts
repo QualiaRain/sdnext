@@ -9,8 +9,7 @@ export async function sleep(ms) {
 }
 
 export function gradioApp(): Document | Element | ShadowRoot {
-  const elems = document.getElementsByTagName('gradio-app');
-  const elem: Document | Element = elems.length === 0 ? document : elems[0];
+  const elem: Document | Element = document.getElementsByTagName('gradio-app').item(0) || document; // item(0) stops at the first match, while length walks the whole document after any DOM change
   if (elem !== document) elem.getElementById = (id) => document.getElementById(id);
   if (elem !== document && elem.shadowRoot) {
     return elem.shadowRoot;
@@ -134,7 +133,7 @@ function scheduleAfterUiUpdateCallbacks() {
 }
 
 let executedOnLoaded = false;
-const ignoreElements = ['logMonitorData', 'logWarnings', 'logErrors', 'tooltip-container', 'logger'];
+const ignoreElements = ['logMonitorData', 'logWarnings', 'logErrors', 'tooltip-container', 'logger', 'logMonitorJS'];
 const ignoreElementsSet = new Set(ignoreElements);
 const ignoreClasses = ['wrap'];
 

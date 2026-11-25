@@ -15,16 +15,22 @@ const logBuffer = (ts: string, type: 'log' | 'debug' | 'error', msg: unknown[]):
   window.logBufferDirty = true;
 };
 
-const scrollBottom = async (el: HTMLElement): Promise<void> => {
-  const lastChild = el.lastElementChild;
-  if (lastChild) lastChild.scrollIntoView({ behavior: 'smooth' });
+let scrollPending = false;
+const scrollBottom = (el: HTMLElement): void => { // one scroll per frame: scrollIntoView forces a style and layout pass
+  if (scrollPending) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    const lastChild = el.lastElementChild;
+    if (lastChild) lastChild.scrollIntoView({ behavior: 'smooth' });
+  });
 };
 
 export const log = async (...msg: unknown[]): Promise<void> => {
   const dt = new Date();
   const ts = `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}.${dt.getMilliseconds().toString().padStart(3, '0')}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML('beforeend', window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.log(ts, ...msg);
@@ -35,7 +41,7 @@ export const debug = async (...msg: unknown[]): Promise<void> => {
   const dt = new Date();
   const ts = `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}.${dt.getMilliseconds().toString().padStart(3, '0')}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML('beforeend', window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.debug(ts, ...msg);
@@ -46,7 +52,7 @@ export const error = async (...msg: unknown[]): Promise<void> => {
   const dt = new Date();
   const ts = `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}.${dt.getMilliseconds().toString().padStart(3, '0')}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML('beforeend', window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.error(ts, ...msg);

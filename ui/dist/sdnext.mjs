@@ -9803,15 +9803,21 @@ var logBuffer = (ts, type, msg) => {
   if (window.logRingBuffer.length > maxLogLength) window.logRingBuffer.shift();
   window.logBufferDirty = true;
 };
-var scrollBottom = async (el2) => {
-  const lastChild = el2.lastElementChild;
-  if (lastChild) lastChild.scrollIntoView({ behavior: "smooth" });
+var scrollPending = false;
+var scrollBottom = (el2) => {
+  if (scrollPending) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    scrollPending = false;
+    const lastChild = el2.lastElementChild;
+    if (lastChild) lastChild.scrollIntoView({ behavior: "smooth" });
+  });
 };
 var log = async (...msg) => {
   const dt = /* @__PURE__ */ new Date();
   const ts = `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}:${dt.getSeconds().toString().padStart(2, "0")}.${dt.getMilliseconds().toString().padStart(3, "0")}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML("beforeend", window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.log(ts, ...msg);
@@ -9821,7 +9827,7 @@ var debug = async (...msg) => {
   const dt = /* @__PURE__ */ new Date();
   const ts = `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}:${dt.getSeconds().toString().padStart(2, "0")}.${dt.getMilliseconds().toString().padStart(3, "0")}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML("beforeend", window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.debug(ts, ...msg);
@@ -9831,7 +9837,7 @@ var error = async (...msg) => {
   const dt = /* @__PURE__ */ new Date();
   const ts = `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}:${dt.getSeconds().toString().padStart(2, "0")}.${dt.getMilliseconds().toString().padStart(3, "0")}`;
   if (window.logger) {
-    if (window.logPrettyPrint) window.logger.innerHTML += window.logPrettyPrint(...msg);
+    if (window.logPrettyPrint) window.logger.insertAdjacentHTML("beforeend", window.logPrettyPrint(...msg));
     scrollBottom(window.logger);
   }
   console.error(ts, ...msg);
@@ -9961,8 +9967,7 @@ async function sleep(ms) {
   });
 }
 function gradioApp() {
-  const elems = document.getElementsByTagName("gradio-app");
-  const elem = elems.length === 0 ? document : elems[0];
+  const elem = document.getElementsByTagName("gradio-app").item(0) || document;
   if (elem !== document) elem.getElementById = (id) => document.getElementById(id);
   if (elem !== document && elem.shadowRoot) {
     return elem.shadowRoot;
@@ -10057,7 +10062,7 @@ function scheduleAfterUiUpdateCallbacks() {
   uiAfterUpdateTimeout = setTimeout(() => executeCallbacks(uiAfterUpdateCallbacks), 250);
 }
 var executedOnLoaded = false;
-var ignoreElements = ["logMonitorData", "logWarnings", "logErrors", "tooltip-container", "logger"];
+var ignoreElements = ["logMonitorData", "logWarnings", "logErrors", "tooltip-container", "logger", "logMonitorJS"];
 var ignoreElementsSet = new Set(ignoreElements);
 var ignoreClasses = ["wrap"];
 var mutationTimer;
@@ -15870,6 +15875,39 @@ async function setHint(el2, entry) {
   } else {
   }
 }
+var idIndexData = null;
+var idIndex = /* @__PURE__ */ new Map();
+var labelIndexData = null;
+var labelIndex = /* @__PURE__ */ new Map();
+function findById(elId) {
+  if (idIndexData !== localeData.data) {
+    const ids = /* @__PURE__ */ new Map();
+    localeData.data.forEach((l, i) => {
+      const id = l.id ? String(l.id) : "";
+      if (id && !ids.has(id)) ids.set(id, i);
+    });
+    idIndex = ids;
+    idIndexData = localeData.data;
+  }
+  let first = -1;
+  for (let i = 0; i <= elId.length; i++) {
+    const idx = idIndex.get(elId.slice(i));
+    if (idx !== void 0 && (first < 0 || idx < first)) first = idx;
+  }
+  return first < 0 ? void 0 : localeData.data[first];
+}
+function findByLabel(desired) {
+  if (labelIndexData !== localeData.data) {
+    const labels = /* @__PURE__ */ new Map();
+    for (const l of localeData.data) {
+      const label = l.label.toLowerCase().trim();
+      if (!labels.has(label)) labels.set(label, l);
+    }
+    labelIndex = labels;
+    labelIndexData = localeData.data;
+  }
+  return labelIndex.get(desired);
+}
 async function setHints() {
   let json;
   let overrideData = [];
@@ -15896,14 +15934,14 @@ async function setHints() {
   const t0 = performance.now();
   for (const el2 of elements) {
     let found;
-    if (el2.id) found = localeData.data.find((l) => l.id && (l.id === el2.id || el2.id.endsWith(l.id)));
+    if (el2.id) found = findById(el2.id);
     if (!found) {
       if (el2.dataset.original) {
         const desired = el2.dataset.original.toLowerCase().trim();
-        if (desired.length > 0) found = localeData.data.find((l) => l.label.toLowerCase().trim() === desired);
+        if (desired.length > 0) found = findByLabel(desired);
       } else {
         const desired = el2.textContent.toLowerCase().trim();
-        if (desired.length > 0) found = localeData.data.find((l) => l.label.toLowerCase().trim() === desired);
+        if (desired.length > 0) found = findByLabel(desired);
       }
     }
     if (found?.localized?.length > 0) {
@@ -15930,10 +15968,10 @@ async function applyHintToElement(el2) {
   const isValidElement = el2.tagName === "BUTTON" || el2.tagName === "H2" || el2.classList.contains("hint") || el2.tagName === "SPAN" && (el2.parentElement?.tagName === "LABEL" || el2.parentElement?.classList.contains("label-wrap") || el2.dataset.testid === "block-info");
   if (!isValidElement) return;
   let found;
-  if (el2.id) found = localeData.data.find((l) => l.id && (l.id === el2.id || el2.id.endsWith(l.id)));
+  if (el2.id) found = findById(el2.id);
   if (!found) {
-    if (el2.dataset.original) found = localeData.data.find((l) => l.label.toLowerCase().trim() === el2.dataset.original.toLowerCase().trim());
-    else found = localeData.data.find((l) => l.label.toLowerCase().trim() === el2.textContent.toLowerCase().trim());
+    if (el2.dataset.original) found = findByLabel(el2.dataset.original.toLowerCase().trim());
+    else found = findByLabel(el2.textContent.toLowerCase().trim());
   }
   if (el2.textContent && el2.textContent.length > 0 && found?.localized?.length > 0) {
     if (!el2.dataset.original) el2.dataset.original = el2.textContent;

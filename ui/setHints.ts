@@ -316,6 +316,44 @@ function createLocaleJSON() {
   console.log('localeJSON', sorted);
 }
 
+// lookup indexes over localeData.data, rebuilt whenever the array is replaced (load or locale change)
+// each index is stored only once complete, so a malformed entry cannot leave a partial index behind
+let idIndexData: any[] | null = null;
+let idIndex = new Map<string, number>(); // id as string -> position of its first entry
+let labelIndexData: any[] | null = null;
+let labelIndex = new Map<string, any>(); // label.toLowerCase().trim() -> first entry
+
+function findById(elId: string) { // same as localeData.data.find((l) => l.id && (l.id === elId || elId.endsWith(l.id)))
+  if (idIndexData !== localeData.data) {
+    const ids = new Map<string, number>();
+    localeData.data.forEach((l, i) => {
+      const id = l.id ? String(l.id) : ''; // ids are strings in en and numbers in other locales; endsWith compares their string form
+      if (id && !ids.has(id)) ids.set(id, i);
+    });
+    idIndex = ids;
+    idIndexData = localeData.data;
+  }
+  let first = -1;
+  for (let i = 0; i <= elId.length; i++) { // every suffix of the element id; keep the earliest entry
+    const idx = idIndex.get(elId.slice(i));
+    if (idx !== undefined && (first < 0 || idx < first)) first = idx;
+  }
+  return first < 0 ? undefined : localeData.data[first];
+}
+
+function findByLabel(desired: string) { // same as localeData.data.find((l) => l.label.toLowerCase().trim() === desired)
+  if (labelIndexData !== localeData.data) {
+    const labels = new Map<string, any>();
+    for (const l of localeData.data) {
+      const label = l.label.toLowerCase().trim();
+      if (!labels.has(label)) labels.set(label, l);
+    }
+    labelIndex = labels;
+    labelIndexData = localeData.data;
+  }
+  return labelIndex.get(desired);
+}
+
 export async function setHints() {
   let json: any;
   let overrideData: any[] = [];
@@ -343,14 +381,14 @@ export async function setHints() {
   for (const el of elements) {
     // localize elements text
     let found;
-    if (el.id) found = localeData.data.find((l) => l.id && (l.id === el.id || el.id.endsWith(l.id))); // prefer id match for disambiguation
+    if (el.id) found = findById(el.id); // prefer id match for disambiguation
     if (!found) {
       if (el.dataset.original) {
         const desired = el.dataset.original.toLowerCase().trim();
-        if (desired.length > 0) found = localeData.data.find((l) => l.label.toLowerCase().trim() === desired);
+        if (desired.length > 0) found = findByLabel(desired);
       } else {
         const desired = el.textContent.toLowerCase().trim();
-        if (desired.length > 0) found = localeData.data.find((l) => l.label.toLowerCase().trim() === desired);
+        if (desired.length > 0) found = findByLabel(desired);
       }
     }
     if (found?.localized?.length > 0) {
@@ -389,10 +427,10 @@ async function applyHintToElement(el) {
   if (!isValidElement) return;
 
   let found; // find matching hint data - prefer id match for disambiguation
-  if (el.id) found = localeData.data.find((l) => l.id && (l.id === el.id || el.id.endsWith(l.id)));
+  if (el.id) found = findById(el.id);
   if (!found) {
-    if (el.dataset.original) found = localeData.data.find((l) => l.label.toLowerCase().trim() === el.dataset.original.toLowerCase().trim());
-    else found = localeData.data.find((l) => l.label.toLowerCase().trim() === el.textContent.toLowerCase().trim());
+    if (el.dataset.original) found = findByLabel(el.dataset.original.toLowerCase().trim());
+    else found = findByLabel(el.textContent.toLowerCase().trim());
   }
 
   if (el.textContent && el.textContent.length > 0 && found?.localized?.length > 0) { // apply localization if found
