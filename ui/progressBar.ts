@@ -239,7 +239,7 @@ export function requestProgress(id_task = 'undefined', progressEl = null, galler
     const hidden = document.hidden || !previewVisible();
     let request_id = id_live_preview;
     if (hidden) {
-      if (!window.opts.live_preview_require_focus) request_id = id_live_preview;
+      if (window.opts.live_preview_require_focus) request_id = -1; // progress only, the next visible poll asks for a preview again
     } else if (window.opts.live_preview_refresh_period === 0) {
       request_id = -1;
     }

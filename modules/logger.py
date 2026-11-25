@@ -296,6 +296,8 @@ def setup_logging(debug=None, trace=None, filename=None):
         log_rolled = True
 
     rb = RingBuffer(100) # 100 entries default in log ring buffer
+    if isinstance(getattr(log, 'buffer', None), list):
+        rb.buffer = log.buffer # keep the lines logged before this reset, the log API serves them
     rb.addFilter(log_filter)
     rb.setLevel(level)
     log.addHandler(rb)

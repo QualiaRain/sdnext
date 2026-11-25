@@ -11290,7 +11290,7 @@ function requestProgress(id_task = "undefined", progressEl = null, galleryEl = n
     const hidden = document.hidden || !previewVisible();
     let request_id = id_live_preview;
     if (hidden) {
-      if (!window.opts.live_preview_require_focus) request_id = id_live_preview;
+      if (window.opts.live_preview_require_focus) request_id = -1;
     } else if (window.opts.live_preview_refresh_period === 0) {
       request_id = -1;
     }
