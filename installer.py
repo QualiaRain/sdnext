@@ -1305,6 +1305,7 @@ def install_submodules(force=True):
     git('submodule --quiet sync --recursive')
     submodules = txt.splitlines()
     res = []
+    reattach = []
     for submodule in submodules:
         try:
             parts = submodule.split()
@@ -1317,9 +1318,26 @@ def install_submodules(force=True):
                 if len(errors) == failed: # a failed pull is still retried by install_extensions and update_wiki
                     submodules_updated.add(os.path.realpath(name))
             else:
-                branch(name)
+                reattach.append((submodule, name))
         except Exception:
             log.error(f'Submodule update error: {submodule}')
+
+    def reattach_submodule(item):
+        submodule, name = item
+        try:
+            branch(name)
+        except Exception:
+            log.error(f'Submodule update error: {submodule}')
+
+    if len(reattach) > 0: # each submodule is a separate repository, so checkout, fetch and merge can run side by side
+        from concurrent.futures.thread import ThreadPoolExecutor
+        timer = getattr(ts, '__self__', None) # the Timer behind ts, None when modules.timer is not available
+        saved = {k: timer.get(k) for k in ('git', 'branch')} if timer is not None else {}
+        t_pool = time.time()
+        with ThreadPoolExecutor(max_workers=min(len(reattach), 8), thread_name_prefix='sdnext-git') as pool:
+            list(pool.map(reattach_submodule, reattach))
+        for k, v in saved.items(): # thread durations overlap: count the wall time once, as the sequential loop did
+            timer.set(k, v + time.time() - t_pool)
     setup_logging()
     if args.profile:
         pr.disable()
@@ -1745,6 +1763,15 @@ def check_version(reset=True): # pylint: disable=unused-argument
             api_base = f'https://api.github.com/repos/{url_parts}'
         else:
             api_base = 'https://api.github.com/repos/vladmandic/sdnext'
+        import threading
+        from concurrent.futures import Future
+        req_commits = Future()
+        def get_commits(): # sent while the branch list loads since it only needs the branch name; a daemon thread so that it never delays exit or ctrl+c
+            try:
+                req_commits.set_result(requests.get(f'{api_base}/branches/{branch_name}', timeout=5))
+            except Exception as e:
+                req_commits.set_exception(e)
+        threading.Thread(target=get_commits, name='sdnext-version', daemon=True).start()
         branches = requests.get(f'{api_base}/branches', timeout=5).json()
         if not isinstance(branches, list):
             log.error(f'Repository: branches API returned {branches!r} from {api_base}')
@@ -1759,7 +1786,7 @@ def check_version(reset=True): # pylint: disable=unused-argument
         ts('latest', t_start)
         return
     try:
-        commits = requests.get(f'{api_base}/branches/{branch_name}', timeout=5).json()
+        commits = req_commits.result().json()
         latest = commits['commit']['sha']
         if len(latest) != 40:
             log.error(f'Repository error: commit={latest} invalid')
