@@ -366,6 +366,12 @@ function sortExtraNetworks(fixed = 'no') {
     if (cards.length === 0) return 'sort: no cards';
     num += cards.length;
     cards.sort(compareCards);
+    let pending = cards.length - 1;
+    for (let node = pg.lastChild; node && pending >= 0; node = node.previousSibling) {
+      if (node === cards[pending]) pending--;
+      else if (node.nodeType !== Node.TEXT_NODE || !/^[ \t\n\r\f]*$/.test(node.data)) break;
+    }
+    if (pending < 0) continue; // cards already trail the page in this order with only whitespace between them: re-appending would only churn the dom
     for (const card of cards) pg.appendChild(card);
   }
   const desc = sortDesc[sortVal];
