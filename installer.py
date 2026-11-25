@@ -80,6 +80,7 @@ args = Dot({
     'uv': False,
 })
 restart_required = False
+submodules_updated = set() # folders pulled without errors by install_submodules during upgrade
 extensions_commit = { # force specific commit for extensions
     'sd-webui-controlnet': 'ecd33eb',
     'adetailer': 'a89c01d'
@@ -283,6 +284,10 @@ def uv_info():
                 if os.path.exists(cache_path):
                     if os.stat(cache_path).st_ino == st.st_ino:
                         uv_cache_active = True
+                if uv_cache_active: # one deduped file is enough
+                    break
+            if uv_cache_active:
+                break
     log.debug(f'Package manager: app=uv version="{uv_version}" folder="{uv_cache_dir}" dedup={uv_cache_active}')
 
 
@@ -1162,7 +1167,7 @@ def check_modified_files():
 def run_extension_installer(folder):
     path_installer = os.path.realpath(os.path.join(folder, "install.py"))
     if not os.path.isfile(path_installer):
-        return
+        return False
     try:
         is_builtin = 'extensions-builtin' in folder
         log.debug(f'Extension installer: builtin={is_builtin} file="{path_installer}"')
@@ -1184,6 +1189,12 @@ def run_extension_installer(folder):
                 log.debug(txt)
     except Exception as e:
         log.error(f'Extension installer exception: {e}')
+    return True
+
+
+# list installed packages as name==version, parsing each metadata file once
+def list_packages():
+    return [f"{meta['Name']}=={meta['Version']}" for meta in (d.metadata for d in importlib.metadata.distributions())]
 
 
 # get list of all enabled extensions
@@ -1217,7 +1228,7 @@ def install_extensions(force=False):
     if args.profile:
         pr = cProfile.Profile()
         pr.enable()
-    pkgs = [f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()]
+    pkgs = list_packages()
     log.debug(f'Installed packages: {len(pkgs)}')
     from modules.paths import extensions_builtin_dir, extensions_dir
     extensions_duplicates = []
@@ -1244,26 +1255,28 @@ def install_extensions(force=False):
                 extensions_duplicates.append(ext)
                 continue
             extensions_enabled.append(ext)
-            if args.upgrade or force:
+            if force or (args.upgrade and os.path.realpath(os.path.join(folder, ext)) not in submodules_updated): # built-in extensions are submodules that install_submodules has just pulled
                 try:
                     res.append(update(os.path.join(folder, ext)))
                 except Exception:
                     res.append(f'Extension update error: {os.path.join(folder, ext)}')
                     log.error(f'Extension update error: {os.path.join(folder, ext)}')
+            installer_ran = False
             if not args.skip_extensions:
                 commit = extensions_commit.get(os.path.basename(ext), None)
                 if commit is not None:
                     log.debug(f'Extension force: name="{ext}" commit={commit}')
                     res.append(git(f'checkout {commit}', os.path.join(folder, ext)))
-                run_extension_installer(os.path.join(folder, ext))
-            try:
-                updated = [f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()]
-                diff = [x for x in updated if x not in pkgs]
-                pkgs = updated
-                if len(diff) > 0:
-                    log.info(f'Extension installed packages: {ext} {diff}')
-            except Exception as e:
-                log.error(f'Extension installed unknown package: {e}')
+                installer_ran = run_extension_installer(os.path.join(folder, ext)) is not False # False only when there is no install.py
+            if installer_ran: # only an extension installer can change installed packages
+                try:
+                    updated = list_packages()
+                    diff = [x for x in updated if x not in pkgs]
+                    pkgs = updated
+                    if len(diff) > 0:
+                        log.info(f'Extension installed packages: {ext} {diff}')
+                except Exception as e:
+                    log.error(f'Extension installed unknown package: {e}')
             ts(ext, t_start)
     log.info(f'Extensions enabled: {extensions_enabled}')
     if len(extensions_duplicates) > 0:
@@ -1299,7 +1312,10 @@ def install_submodules(force=True):
                 continue
             name = parts[1].strip()
             if args.upgrade:
+                failed = len(errors)
                 res.append(update(name))
+                if len(errors) == failed: # a failed pull is still retried by install_extensions and update_wiki
+                    submodules_updated.add(os.path.realpath(name))
             else:
                 branch(name)
         except Exception:
@@ -1786,8 +1802,10 @@ def update_wiki():
     t_start = time.time()
     if args.upgrade:
         log.info('Updating Wiki')
+        folder = os.path.join(os.path.dirname(__file__), "wiki")
         try:
-            update(os.path.join(os.path.dirname(__file__), "wiki"))
+            if os.path.realpath(folder) not in submodules_updated: # already pulled by install_submodules
+                update(folder)
         except Exception:
             log.error('Wiki update error')
     ts('wiki', t_start)
@@ -1866,7 +1884,8 @@ def update_state():
 
 # check if we can run setup in quick mode
 def check_timestamp():
-    if not quick_allowed or not os.path.isfile(log_file):
+    from modules.logger import log_file as active_log_file # --log or SD_LOG can move the log away from the default sdnext.log
+    if not quick_allowed or not (os.path.isfile(log_file) or os.path.isfile(active_log_file)):
         return False
     if args.quick:
         return True
@@ -1979,7 +1998,6 @@ def ensure_base_requirements():
     setuptools_version = '77.0.3'
     if (args.uv or '--uv' in sys.argv) and (shutil.which('uv') is not None): # early enable uv
         args.uv = True # pylint: disable=attribute-defined-outside-init
-        uv_info()
 
     def update_setuptools():
         local_log = logging.getLogger('sdnext.installer')
