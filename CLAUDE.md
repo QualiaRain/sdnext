@@ -4,29 +4,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SD.Next is an all-in-one WebUI for AI image and video generation built on Stable Diffusion and dozens of other diffusion model families. It is a Python backend (Torch for inference, FastAPI for API routes, Gradio for UI components) with a JavaScript/CSS frontend.
+SD.Next is an all-in-one WebUI for AI image and video generation built on Stable Diffusion and dozens of other diffusion model families. It is a Python backend (Torch for inference, FastAPI for API routes, Gradio for UI components) with a TypeScript/CSS frontend.
 
 Detailed agent instructions already exist in this repo and take precedence for their areas:
 - `.github/copilot-instructions.md` — general guidelines (also referenced by `AGENTS.md`)
 - `.github/instructions/core.instructions.md` — Python core runtime, startup, model loading, API, device logic
-- `.github/instructions/ui.instructions.md` — frontend JS/HTML/CSS, localization, modernui/kanvas extensions
+- `.github/instructions/ui.instructions.md` — frontend TypeScript/HTML/CSS, build and lint commands, localization, modernui/kanvas extensions
+- `.github/instructions/hints.instructions.md` — typography rules for hint text in `ui/locale/locale_en.json`
 - `.github/skills/README.md` — repo-local skills for recurring tasks (porting models/pipelines, debugging model loading, auditing API/schedulers/scripts, lint workflow, etc.). Check this index before starting model-integration or audit work.
 
 ## Commands
 
-A Python `venv` must be active for all Python commands: `source venv/bin/activate` (Linux) or `venv\Scripts\activate` (Windows). Node >= 22 with `pnpm`/`npm` is used for JS tooling and script orchestration.
+A Python `venv` must be active for all Python commands: `source venv/bin/activate` (Linux) or `venv\Scripts\activate` (Windows). Node >= 24 with `pnpm` (version pinned by `packageManager` in `package.json`) is used for JS tooling and script orchestration; `npm run <script>` works for the same scripts.
 
 ```bash
-python launch.py --debug        # full startup (server at :7860)
-python launch.py --debug --test # startup self-test without serving (also: npm run test)
-npm run lint                    # full sequence: pre-commit, eslint (core/ui/kanvas), ruff, pylint
+python launch.py                # full startup (server at :7860); debug logging is on by default, SD_NODEBUG=1 turns it off
+python launch.py --test         # startup self-test without serving (also: npm run test)
+npm run lint                    # full sequence: pre-commit, eslint, tsc, ruff, pylint
+npm run full                    # lint plus codespell, ty and pyright
 npm run ruff                    # ruff check
-npm run pylint                  # pylint over *.py modules/ pipelines/ scripts/ extensions-builtin/
-npm run eslint                  # eslint javascript/
-npm run eslint-ui               # eslint for extensions-builtin/sdnext-modernui
-npm run eslint-kanvas           # eslint for extensions-builtin/sdnext-kanvas
-npm run format                  # pre-commit run --all-files (line endings, whitespace, json/yaml checks)
+npm run pylint                  # pylint over *.py modules pipelines scripts extensions-builtin
+npm run eslint                  # eslint for core ui/, modernui and kanvas (eslint:core, eslint:modernui, eslint:kanvas)
+npm run tsc                     # TypeScript type check (tsc:core, tsc:modernui, tsc:kanvas)
+npm run build                   # rebuild UI bundles (build:core -> ui/dist/, build:modernui, build:kanvas)
+npm run precommit               # pre-commit run --all-files (line endings, whitespace, json/yaml checks)
 npm run pyright                 # pyright type check (alternative: npm run ty)
+npm run codespell               # spelling check
+npm run compile                 # python test/test-compile.py
 npm run todo                    # list TODO markers in *.py modules/ pipelines/
 ```
 
@@ -34,7 +38,16 @@ Lint individual files directly with `ruff check <file>` and `pylint <file>` (aft
 
 ### Tests
 
-There is no pytest suite. Tests are API smoke scripts in `test/` and `cli/` that run against a **live server** (start one first with `python launch.py`):
+There is no pytest suite. Tests are plain scripts in `test/` and `cli/` of two kinds.
+
+Offline scripts state "No running server required" in their docstring and run directly:
+
+```bash
+python test/test-json-helpers.py          # one offline script
+python test/test-prompt-curly-braces.py
+```
+
+API smoke scripts run against a **live server** with a model loaded (start one first with `python launch.py`):
 
 ```bash
 ./test/full-test.sh                                   # full API smoke suite
@@ -67,8 +80,9 @@ python test/test-generation-api.py                    # individual test scripts
 ### Scripts and extensions
 
 - `scripts/*.py` are dynamically loaded plug-ins subclassing `Script` from `modules/scripts_manager.py` (key overrides: `title`, `show`, `ui`, then `run` or `process`). `ui()` outputs must match `run()`/`process()` parameters.
-- `extensions-builtin/` holds bundled extensions, notably `sdnext-modernui` (the actual UI; has its own eslint setup) and `sdnext-kanvas`. User extensions load from `extensions/`. Base frontend JS lives in `javascript/`.
-- UI strings/hints live in localization JSON in `html/locale_*.json` and `html/override_*.json`; keep user-facing text changes synchronized with locale resources (see `.github/instructions/hints.instructions.md`). Locale tooling: `npm run localize` (`cli/localize.js`) and validation scripts in `test/`.
+- `extensions-builtin/` holds bundled extensions as git submodules, notably `sdnext-modernui` (the actual UI; has its own eslint/tsc/build setup) and `sdnext-kanvas`. User extensions load from `extensions/`; do not inspect or modify files there unless asked.
+- The core frontend is TypeScript in `ui/*.ts`, bundled by `npm run build:core` into `ui/dist/sdnext.mjs`. Never edit built output (`ui/dist/`, `extensions-builtin/*/javascript/`); change the source and rebuild. Styles are in `ui/css/`, static assets in `ui/assets/`.
+- UI strings/hints live in `ui/locale/locale_en.json`; add or change user-facing text there (see `.github/instructions/hints.instructions.md`). The other `ui/locale/locale_*.json` files are generated translations and `override_*.json` are manual overrides: do not edit either. Locale tooling: `npm run localize` (`test/localize.mjs`).
 
 ## Conventions
 
@@ -78,7 +92,7 @@ python test/test-generation-api.py                    # individual test scripts
 - Behavior is driven by `SD_*` environment variables (e.g. `SD_LOAD_DEBUG`, `SD_INSTALL_DEBUG`) — respect these instead of hardcoding platform/model assumptions. `npm run debug` lists known debug flags.
 - Temporary scripts or markdown reports go in `tmp/`; reusable test scripts go in `test/`; follow existing CLI/API tool patterns in `cli/` when adding automation.
 - Logging uses `from modules.logger import log` with f-string style `key=value` formatting.
-- Project documentation markdown lives in `wiki/` (see the `update-docs` skill); model reference catalogs live in `data/reference*.json` (see the `reference-catalog` skill).
+- Project documentation markdown lives in the `wiki/` submodule (see the `update-docs` skill; developer guidelines are `wiki/Dev-*.md`, indexed in `wiki/Dev-Home.md`); model reference catalogs live in `data/reference-*.json` (see the `reference-catalog` skill).
 
 ## Responsible AI Disclosure
 
