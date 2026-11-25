@@ -271,6 +271,7 @@ export default defineConfig([
     '**/Vlad-Neomorph.css', // Waiting on plugin fix https://github.com/eslint/css/pull/411
     'javascript/*',
     'ui/js/*',
+    '.github/skills/**/workflow.js', // Workflow tool scripts: top-level await and globals injected by the runner
   ]),
   ...jsConfig,
   ...typescriptConfig,
