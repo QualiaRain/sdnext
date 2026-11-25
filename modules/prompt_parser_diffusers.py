@@ -374,13 +374,14 @@ class DiffusersTextualInversionManager(BaseTextualInversionManager):
     def _maybe_convert_prompt(self, prompt: str, tokenizer: PreTrainedTokenizer):
         tokens = tokenizer.tokenize(prompt)
         unique_tokens = set(tokens)
+        added_tokens = tokenizer.added_tokens_encoder if unique_tokens else {} # read once: the property rebuilds the whole map on every access
         for token in unique_tokens:
-            if token in tokenizer.added_tokens_encoder:
+            if token in added_tokens:
                 if getattr(self.pipe, 'embedding_db', None) is not None:
                     self.pipe.embedding_db.embeddings_used.append(token)
                 replacement = token
                 i = 1
-                while f"{token}_{i}" in tokenizer.added_tokens_encoder:
+                while f"{token}_{i}" in added_tokens:
                     replacement += f" {token}_{i}"
                     i += 1
                 prompt = prompt.replace(token, replacement)
@@ -447,15 +448,16 @@ def get_tokens(pipe, msg, prompt):
                     ids[i] = tokenizer.bos_token_id
                 elif ids[i] == 15203:
                     ids[i] = tokenizer.eos_token_id
-        tokens = []
-        for i in ids:
-            try:
-                key = list(token_dict.keys())[list(token_dict.values()).index(i)]
-                tokens.append(key)
-            except Exception:
-                tokens.append(f'UNK_{i}')
         token_count = len(ids) - int(has_bos_token) - int(has_eos_token)
-        debug(f'Prompt tokenizer: type={msg} tokens={token_count} tokens={tokens} ids={ids}')
+        if debug_enabled: # token names are only used by the trace and each lookup scans the whole vocabulary
+            tokens = []
+            for i in ids:
+                try:
+                    key = list(token_dict.keys())[list(token_dict.values()).index(i)]
+                    tokens.append(key)
+                except Exception:
+                    tokens.append(f'UNK_{i}')
+            debug(f'Prompt tokenizer: type={msg} tokens={token_count} tokens={tokens} ids={ids}')
     return token_count
 
 

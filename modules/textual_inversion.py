@@ -1,5 +1,6 @@
 import os
 import time
+import inspect
 import torch
 import safetensors.torch
 from transformers import AddedToken
@@ -146,7 +147,18 @@ def insert_vectors(embedding, tokenizers, text_encoders, hiddensizes):
             idx = hiddensizes.index(size)
             unk_token_id = tokenizers[idx].convert_tokens_to_ids(tokenizers[idx].unk_token)
             if text_encoders[idx].get_input_embeddings().weight.data.shape[0] != len(tokenizers[idx]):
-                text_encoders[idx].resize_token_embeddings(len(tokenizers[idx]))
+                resize = text_encoders[idx].resize_token_embeddings
+                if 'mean_resizing' in inspect.signature(resize).parameters and not text_encoders[idx].get_input_embeddings().weight.is_meta:
+                    # transformers>=4.46 samples new rows from the mean and covariance of the whole table, which is slow on cpu and overwritten below for every loaded vector
+                    # rows no loaded vector fills (embeddings that fail to load) get the mean, which that sampling yields to within its 1e-9 scaled covariance
+                    # meta weights (sequential offload) keep the default call, which fails there as before instead of growing a table the offload hook cannot fill
+                    num_tokens = text_encoders[idx].get_input_embeddings().weight.data.shape[0]
+                    resize(len(tokenizers[idx]), mean_resizing=False)
+                    weight = text_encoders[idx].get_input_embeddings().weight.data
+                    if weight.shape[0] > num_tokens:
+                        weight[num_tokens:] = torch.mean(weight[:num_tokens].to(torch.float32), dim=0).to(weight.dtype)
+                else:
+                    resize(len(tokenizers[idx]))
             for token, v in zip(embedding.tokens, vector.unbind(), strict=False):
                 token_id = tokenizers[idx].convert_tokens_to_ids(token)
                 if token_id > unk_token_id:
