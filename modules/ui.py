@@ -81,86 +81,88 @@ def create_ui(startup_timer = None) -> gr.Blocks:
     if len(ui_disabled) > 0:
         log.info(f'UI disabled: {ui_disabled}')
 
-    if 'txt2img' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as txt2img_interface:
-            from modules import ui_txt2img
-            ui_txt2img.create_ui()
-            timer.startup.record("ui-txt2img")
-            interfaces += [(txt2img_interface, "Text", "txt2img")]
+    with gr_hijack.defer_blocks_app(): # core tab blocks are only rendered into the final app, so gradio does not need to build a config and app for each
+        if 'txt2img' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as txt2img_interface:
+                from modules import ui_txt2img
+                ui_txt2img.create_ui()
+                timer.startup.record("ui-txt2img")
+                interfaces += [(txt2img_interface, "Text", "txt2img")]
 
-    if 'img2img' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as img2img_interface:
-            from modules import ui_img2img
-            ui_img2img.create_ui()
-            timer.startup.record("ui-img2img")
-            interfaces += [(img2img_interface, "Image", "img2img")]
+        if 'img2img' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as img2img_interface:
+                from modules import ui_img2img
+                ui_img2img.create_ui()
+                timer.startup.record("ui-img2img")
+                interfaces += [(img2img_interface, "Image", "img2img")]
 
-    if 'control' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as control_interface:
-            from modules import ui_control
-            ui_control.create_ui()
-            timer.startup.record("ui-control")
-            interfaces += [(control_interface, "Control", "control")]
+        if 'control' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as control_interface:
+                from modules import ui_control
+                ui_control.create_ui()
+                timer.startup.record("ui-control")
+                interfaces += [(control_interface, "Control", "control")]
 
-    if 'video' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as video_interface:
-            from modules import ui_video
-            ui_video.create_ui()
-            timer.startup.record("ui-video")
-            interfaces += [(video_interface, "Video", "video")]
+        if 'video' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as video_interface:
+                from modules import ui_video
+                ui_video.create_ui()
+                timer.startup.record("ui-video")
+                interfaces += [(video_interface, "Video", "video")]
 
-    if 'extras' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as extras_interface:
-            from modules import ui_postprocessing
-            ui_postprocessing.create_ui()
-            timer.startup.record("ui-extras")
-            interfaces += [(extras_interface, "Process", "process")]
+        if 'extras' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as extras_interface:
+                from modules import ui_postprocessing
+                ui_postprocessing.create_ui()
+                timer.startup.record("ui-extras")
+                interfaces += [(extras_interface, "Process", "process")]
 
-    if 'caption' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as caption_interface:
-            from modules import ui_caption
-            ui_caption.create_ui()
-            timer.startup.record("ui-caption")
-            interfaces += [(caption_interface, "Caption", "caption")]
+        if 'caption' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as caption_interface:
+                from modules import ui_caption
+                ui_caption.create_ui()
+                timer.startup.record("ui-caption")
+                interfaces += [(caption_interface, "Caption", "caption")]
 
-    if 'models' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as models_interface:
-            from modules import ui_models
-            ui_models.create_ui()
-            timer.startup.record("ui-models")
-            interfaces += [(models_interface, "Models", "models")]
+        if 'models' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as models_interface:
+                from modules import ui_models
+                ui_models.create_ui()
+                timer.startup.record("ui-models")
+                interfaces += [(models_interface, "Models", "models")]
 
-    if 'gallery' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as gallery_interface:
-            from modules import ui_gallery
-            ui_gallery.create_ui()
-            timer.startup.record("ui-gallery")
-            interfaces += [(gallery_interface, "Gallery", "gallery")]
+        if 'gallery' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as gallery_interface:
+                from modules import ui_gallery
+                ui_gallery.create_ui()
+                timer.startup.record("ui-gallery")
+                interfaces += [(gallery_interface, "Gallery", "gallery")]
 
-    with gr.Blocks(analytics_enabled=False) as settings_interface:
-        from modules import ui_settings
-        ui_settings.create_ui(ui_disabled)
-        global ui_system_tabs # pylint: disable=global-statement
-        ui_system_tabs = ui_settings.ui_system_tabs
-        shared.opts.reorder()
-        timer.startup.record("ui-extensions")
-        interfaces += [(settings_interface, "System", "system")]
-
-    interfaces += script_callbacks.ui_tabs_callback()
-
-    if 'info' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as info_interface:
-            from modules import ui_docs
-            ui_docs.create_ui()
-            timer.startup.record("ui-info")
-            interfaces += [(info_interface, "Info", "info")]
-
-    if 'extensions' not in ui_disabled:
-        with gr.Blocks(analytics_enabled=False) as extensions_interface:
-            from modules import ui_extensions
-            ui_extensions.create_ui()
+        with gr.Blocks(analytics_enabled=False) as settings_interface:
+            from modules import ui_settings
+            ui_settings.create_ui(ui_disabled)
+            global ui_system_tabs # pylint: disable=global-statement
+            ui_system_tabs = ui_settings.ui_system_tabs
+            shared.opts.reorder()
             timer.startup.record("ui-extensions")
-            interfaces += [(extensions_interface, "Extensions", "extensions")]
+            interfaces += [(settings_interface, "System", "system")]
+
+    interfaces += script_callbacks.ui_tabs_callback() # extension tabs keep gradio defaults: a failing tab stays isolated and keeps its config and app
+
+    with gr_hijack.defer_blocks_app():
+        if 'info' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as info_interface:
+                from modules import ui_docs
+                ui_docs.create_ui()
+                timer.startup.record("ui-info")
+                interfaces += [(info_interface, "Info", "info")]
+
+        if 'extensions' not in ui_disabled:
+            with gr.Blocks(analytics_enabled=False) as extensions_interface:
+                from modules import ui_extensions
+                ui_extensions.create_ui()
+                timer.startup.record("ui-extensions")
+                interfaces += [(extensions_interface, "Extensions", "extensions")]
 
     ui_app = ui_settings.create_quicksettings(interfaces)
 

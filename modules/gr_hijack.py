@@ -1,7 +1,10 @@
 import time
+import threading
+import contextlib
 from PIL import Image
 import gradio
 import gradio.processing_utils
+import gradio.routes
 from modules import scripts_manager, patches, gr_tempdir
 from modules.logger import log
 
@@ -11,6 +14,8 @@ original_IOComponent_init = None
 original_Block_get_config = None
 original_BlockContext_init = None
 original_Blocks_get_config_file = None
+original_App_create_app = None
+defer_thread = None # thread that builds blocks which are only rendered into the final app, see defer_blocks_app
 
 
 def process_kanvas(self, x): # only used when kanvas overrides gradio.Image object
@@ -113,7 +118,31 @@ def BlockContext_init(self, *args, **kwargs):
     return res
 
 
+@contextlib.contextmanager
+def defer_blocks_app():
+    """skip the config and FastAPI app that gradio builds in Blocks.__exit__ for blocks that are only rendered into the final app"""
+    global defer_thread # pylint: disable=global-statement
+    previous = defer_thread
+    defer_thread = threading.get_ident()
+    try:
+        yield
+    finally:
+        defer_thread = previous
+
+
+def is_deferred():
+    return defer_thread is not None and defer_thread == threading.get_ident()
+
+
+def App_create_app(blocks, *args, **kwargs):
+    if is_deferred():
+        return None
+    return original_App_create_app(blocks, *args, **kwargs)
+
+
 def Blocks_get_config_file(self, *args, **kwargs):
+    if is_deferred():
+        return {}
     config = original_Blocks_get_config_file(self, *args, **kwargs)
     for comp_config in config["components"]:
         if "example_inputs" in comp_config:
@@ -283,7 +312,7 @@ def patch_gradio_future():
 
 
 def init():
-    global hijacked, original_IOComponent_init, original_Block_get_config, original_BlockContext_init, original_Blocks_get_config_file # pylint: disable=global-statement
+    global hijacked, original_IOComponent_init, original_Block_get_config, original_BlockContext_init, original_Blocks_get_config_file, original_App_create_app # pylint: disable=global-statement
     if hijacked:
         return
     if hasattr(gradio.components, 'Image'):
@@ -294,6 +323,7 @@ def init():
     original_Block_get_config = patches.patch(__name__, obj=gradio.blocks.Block, field="get_config", replacement=Block_get_config)
     original_BlockContext_init = patches.patch(__name__, obj=gradio.blocks.BlockContext, field="__init__", replacement=BlockContext_init)
     original_Blocks_get_config_file = patches.patch(__name__, obj=gradio.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file)
+    original_App_create_app = patches.patch(__name__, obj=gradio.routes.App, field="create_app", replacement=staticmethod(App_create_app))
     patch_gradio()
     gr_tempdir.patch_video_conversion()
     if not gradio.__version__.startswith('3.43'):

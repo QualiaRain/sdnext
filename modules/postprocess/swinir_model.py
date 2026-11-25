@@ -2,8 +2,6 @@ import numpy as np
 import torch
 from PIL import Image
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn
-from modules.postprocess.swinir_model_arch import SwinIR as net
-from modules.postprocess.swinir_model_arch_v2 import Swin2SR as net2
 from modules import devices, shared
 from modules.logger import log, console
 from modules.upscaler import Upscaler, compile_upscaler
@@ -24,6 +22,8 @@ class UpscalerSwinIR(Upscaler):
         if self.models.get(info.local_data_path, None) is not None:
             log.debug(f"Upscaler cached: type={self.name} model={info.local_data_path}")
             return self.models[info.local_data_path]
+        from modules.postprocess.swinir_model_arch import SwinIR as net # deferred: arch modules import timm
+        from modules.postprocess.swinir_model_arch_v2 import Swin2SR as net2
         pretrained_model = torch.load(info.local_data_path)
         model_v2 = net2(
             upscale=scale,

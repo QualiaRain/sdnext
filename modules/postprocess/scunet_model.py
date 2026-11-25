@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn
 from modules import devices
-from modules.postprocess.scunet_model_arch import SCUNet as net
 from modules.shared import opts, log, console
 from modules.upscaler import Upscaler, compile_upscaler
 
@@ -24,6 +23,7 @@ class UpscalerSCUNet(Upscaler):
             log.debug(f"Upscaler cached: type={self.name} model={info.local_data_path}")
             model=self.models[info.local_data_path]
         else:
+            from modules.postprocess.scunet_model_arch import SCUNet as net # deferred: arch module imports timm
             model = net(in_nc=3, config=[4, 4, 4, 4, 4, 4, 4], dim=64)
             model.load_state_dict(torch.load(info.local_data_path), strict=True)
             model.eval()

@@ -1,8 +1,10 @@
+import gc
 import io
 import os
 import sys
 import time
 import glob
+import atexit
 import signal
 import asyncio
 import logging
@@ -53,6 +55,10 @@ import modules.scheduler
 
 
 if not modules.loader.initialized:
+    collected = gc.collect()
+    gc.freeze() # keep startup imports out of every later full collection; must stay before initialize() and any model load: frozen objects that later become cyclic garbage are never collected
+    atexit.register(gc.unfreeze) # release them at shutdown as before, otherwise nanobind (triton) prints leak warnings
+    log.debug(f'GC: freeze collected={collected} frozen={gc.get_freeze_count()}')
     timer.startup.record("libraries")
 modules.loader.initialized = True
 

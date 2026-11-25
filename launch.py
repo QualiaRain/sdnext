@@ -210,7 +210,12 @@ def start_server(immediate=True, server=None):
     module_spec = importlib.util.spec_from_file_location('webui', 'webui.py')
     server = importlib.util.module_from_spec(module_spec)
     log.debug(f'Starting module: {server}')
-    module_spec.loader.exec_module(server)
+    gc_threshold = gc.get_threshold()
+    gc.set_threshold(gc_threshold[0], gc_threshold[1], 1 << 30) # no automatic full collections while importing webui: each rescans everything imported so far and frees almost nothing
+    try:
+        module_spec.loader.exec_module(server)
+    finally:
+        gc.set_threshold(*gc_threshold)
 
     uvicorn = None
     if args.test:

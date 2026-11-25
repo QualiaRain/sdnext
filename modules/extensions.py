@@ -165,8 +165,11 @@ class Extension:
                 if self.description is None or self.description.startswith("Unnamed repository"):
                     self.description = "[No description]"
                 self.remote = next(repo.remote().urls, None)
-                head = repo.head.commit
-                self.commit_date = repo.head.commit.committed_date
+                head_sha = bytes.fromhex(git.SymbolicReference.dereference_recursive(repo, 'HEAD'))
+                head_obj = repo.odb.stream(head_sha) # uses the cat-file --batch process that reading the commit needs anyway; repo.head.commit starts another git process for the type
+                head_obj.read() # drain it so the process can serve the next request
+                head = git.Commit(repo, head_sha) if head_obj.type == b'commit' else repo.head.commit # a symbolic ref to refs/tags/<annotated tag> puts a tag object in HEAD, which repo.head.commit peels
+                self.commit_date = head.committed_date
                 try:
                     if repo.active_branch:
                         self.branch = repo.active_branch.name
