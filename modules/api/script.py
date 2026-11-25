@@ -1,3 +1,4 @@
+import copy
 from fastapi.exceptions import HTTPException
 import gradio as gr
 from modules.api import models
@@ -78,6 +79,23 @@ def init_default_script_args(script_runner):
                     ui_default_values.append(elem.value)
                 script_args[script.args_from:script.args_to] = ui_default_values
     return script_args
+
+
+default_script_args_cache = {} # runner name -> (runner, (script, args_from, args_to) per script, default args)
+
+
+def get_default_script_args(script_runner):
+    """Same result as init_default_script_args, but builds the script uis only when the runner or its scripts changed since the last call; returns a copy the caller may modify."""
+    signature = [(script, script.args_from, script.args_to) for script in script_runner.scripts]
+    name = getattr(script_runner, 'name', '')
+    cached = default_script_args_cache.get(name)
+    if cached is None or cached[0] is not script_runner or cached[1] != signature:
+        cached = (script_runner, signature, init_default_script_args(script_runner))
+        default_script_args_cache[name] = cached
+    try:
+        return copy.deepcopy(cached[2])
+    except Exception:
+        return list(cached[2])
 
 
 def init_script_args(p, request, default_script_args, selectable_scripts, selectable_script_idx, script_runner):

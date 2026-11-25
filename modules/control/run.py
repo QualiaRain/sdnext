@@ -300,7 +300,7 @@ def control_process(p: StableDiffusionProcessingControl,
     if len(p.script_args) == 0:
         if not p.scripts:
             p.scripts.initialize_scripts(False)
-        p.script_args = script.init_default_script_args(p.scripts)
+        p.script_args = script.get_default_script_args(p.scripts)
 
     # init override scripts
     if override_script_name and override_script_args and len(override_script_name) > 0:
