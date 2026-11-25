@@ -424,8 +424,7 @@ def resize_hires(p, latents): # input=latents output=pil if not latent_upscaler 
             resize = images.resize_image(p.hr_resize_mode, image, p.hr_upscale_to_x, p.hr_upscale_to_y, upscaler_name=p.hr_upscaler, context=p.hr_resize_context)
             resized.append(resize)
 
-    devices.torch_gc()
-    shared.state.end(jobid)
+    shared.state.end(jobid) # end() runs torch_gc
     return resized
 
 

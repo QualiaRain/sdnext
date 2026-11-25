@@ -5,6 +5,7 @@ import time
 import json
 import base64
 import copy
+import threading
 import torch
 import transformers
 import transformers.dynamic_module_utils
@@ -376,6 +377,7 @@ class VQA:
         self.last_annotated_image = None
         self.last_detection_data = None
         self._generation_overrides = None  # Per-request generation parameter overrides
+        self._batch_thread = None  # thread running batch(): its caption() calls skip the forced collection per image, batch() runs one at the end
 
     @property
     def generation_overrides(self):
@@ -1622,7 +1624,7 @@ class VQA:
             sd_models.set_huggingface_options(quiet=True)
             if self.model is not None:
                 offload_aux('vqa')
-            devices.torch_gc(force=True, reason='vqa')
+            devices.torch_gc(force=self._batch_thread != threading.get_ident(), reason='vqa')
 
         # Clean the answer
         answer = clean(answer, question, prefill)
@@ -1703,6 +1705,7 @@ class VQA:
             writer_json = BatchWriter(folder=os.path.dirname(files[0]), fmt='json', filename=f'{vlm_mode}.json')
         orig_offload = shared.opts.caption_offload
         shared.opts.caption_offload = False
+        self._batch_thread = threading.get_ident()
         try:
             import rich.progress as rp
             pbar = rp.Progress(rp.TextColumn('[cyan]VLM:'), rp.BarColumn(), rp.MofNCompleteColumn(), rp.TaskProgressColumn(), rp.TimeRemainingColumn(), rp.TimeElapsedColumn(), rp.TextColumn('[cyan]{task.description}'), console=console)
@@ -1742,7 +1745,9 @@ class VQA:
                 writer_json.close()
         finally:
             shared.opts.caption_offload = orig_offload
+            self._batch_thread = None
             offload_aux('vqa')
+            devices.torch_gc(force=True, reason='vqa batch')
         shared.state.end(jobid)
         return '\n\n'.join(prompts)
 

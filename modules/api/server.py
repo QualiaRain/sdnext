@@ -182,10 +182,11 @@ def get_storage(req: models.ReqStorage = Depends()):
 def get_progress(req: models.ReqProgress = Depends()):
     if shared.state.job_count == 0 and shared.state.sampling_step == 0: # truly idle
         return models.ResProgress(id=shared.state.id, progress=0, eta_relative=0, state=shared.state.dict(), textinfo=shared.state.textinfo)
-    shared.state.do_set_current_image()
     current_image = None
-    if shared.state.current_image and not req.skip_current_image:
-        current_image = helpers.encode_pil_to_base64(shared.state.current_image)
+    if not req.skip_current_image: # decode a preview only for clients that want the image
+        shared.state.do_set_current_image()
+        if shared.state.current_image:
+            current_image = helpers.encode_pil_to_base64(shared.state.current_image)
     batch_x = max(shared.state.job_no, 0)
     batch_y = max(shared.state.job_count, 1)
     step_x = max(shared.state.sampling_step, 0)

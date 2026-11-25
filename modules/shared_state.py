@@ -89,14 +89,14 @@ class State:
         log.debug(f'State: {"pause" if self.paused else "continue"} requested')
 
     def nextjob(self):
-        import modules.devices
-        self.do_set_current_image()
+        from modules import shared
+        if shared.opts.show_progress_type == 'Full': # a full vae decode refuses to run once the job is interrupted, so this one cannot wait until an interrupt asks for it
+            self.do_set_current_image()
         self.job_no += 1
         # self.sampling_step = 0
         self.current_image_sampling_step = -1
         if debug_output:
             log.trace(f'State next: {self}')
-        modules.devices.torch_gc()
 
     def dict(self):
         obj = {

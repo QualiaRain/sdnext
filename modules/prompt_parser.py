@@ -82,6 +82,21 @@ debug_output = os.environ.get('SD_PROMPT_DEBUG', None)
 debug = log.trace if debug_output is not None else lambda *args, **kwargs: None
 
 
+def emphasis_depth(text):
+    """upper bound of how deeply the schedule grammar can nest '(' groups in text: every '(' opens, a ')' right after a backslash never closes"""
+    depth = deepest = 0
+    prev = ''
+    for ch in text:
+        if ch == '(':
+            depth += 1
+            if depth > deepest:
+                deepest = depth
+        elif ch == ')' and prev != '\\' and depth > 0:
+            depth -= 1
+        prev = ch
+    return deepest
+
+
 def get_learned_conditioning_prompt_schedules(prompts, steps):
     """
     >>> g = lambda p: get_learned_conditioning_prompt_schedules([p], 10)[0]
@@ -153,6 +168,8 @@ def get_learned_conditioning_prompt_schedules(prompts, steps):
         return AtStep().transform(tree)
 
     def get_schedule(prompt):
+        if type(prompt) is str and '[' not in prompt and emphasis_depth(prompt) < 100: # both scheduling rules open with '[', so the parse would only rebuild the prompt; deep nesting stays with the parser, which raises RecursionError on it
+            return [[steps, prompt]]
         try:
             tree = schedule_parser.parse(prompt)
         except Exception:

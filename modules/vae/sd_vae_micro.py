@@ -1,4 +1,5 @@
 import os
+import time
 import torch
 import torch.nn.functional as F
 import safetensors.torch
@@ -13,6 +14,8 @@ decoder = None
 decoder_cls = None
 repo_id = 'SD-Next/MicroDecoder'
 warned = None
+failed = {} # vae type: time of the last failed download
+retry_period = 60 # seconds before a failed download is tried again
 supported = ['sd', 'sdxl', 'sd3', 'f1', 'f2', 'hy', 'dcae', 'mage', 'qwen', 'qwen21', 'wan21', 'wan22', 'minimaxh3', 'cog']
 
 
@@ -64,9 +67,12 @@ def decode(latents: torch.Tensor) -> torch.Tensor:
         if os.path.exists(os.path.join(model_folder, model_file)): # attempt local-first
             model_path = os.path.join(model_folder, model_file)
         else:
+            if vae_cls in failed and time.monotonic() - failed[vae_cls] < retry_period: # each failed attempt can take 20s or more of hub retries
+                return latents
             try:
-                model_path = hf.hf_hub_download(repo_id=repo_id, filename=model_file, local_dir=model_folder)
+                model_path = hf.hf_hub_download(repo_id=repo_id, filename=model_file, local_dir=model_folder, local_files_only=shared.opts.offline_mode)
             except Exception as e:
+                failed[vae_cls] = time.monotonic()
                 warn_once(e)
                 return latents
             if not os.path.exists(model_path):

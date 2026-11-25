@@ -529,6 +529,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 log.debug(f'Process: batch={n+1}/{p.n_iter} interrupted')
                 _keep = get_opt(p, 'keep_incomplete')
                 p.do_not_save_samples = not _keep
+                if shared.state.job_no > 0 and shared.opts.show_progress_type != 'Full': # a pass ended and no job began or ended since: decode its last latent now, state.nextjob() decodes only full vae previews
+                    shared.state.preview_job, shared.state.current_image_sampling_step = -1, -1 # a live preview poll may be decoding right now, do not wait for its image
+                    shared.state.do_set_current_image()
                 if shared.state.current_image is not None and isinstance(shared.state.current_image, Image.Image):
                     samples = [shared.state.current_image]
                     infotexts = [create_infotext(p, p.all_prompts, p.all_seeds, index=0)]

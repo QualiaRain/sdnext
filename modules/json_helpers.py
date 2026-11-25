@@ -111,15 +111,19 @@ def writefile(obj: dict | list, filename: str | os.PathLike[str], mode="w", sile
         try:
             t0 = time.time()
             snapshot = obj.copy() if isinstance(obj, (dict, list)) else obj # dict.copy and list.copy run under the GIL, so a concurrent insert cannot interrupt them
-            data = copy.deepcopy(snapshot)
-            for k, v in list(data.items()) if isinstance(data, dict) else []: # validate each key-by-key to avoid global exceptions
-                try:
-                    _tmp = json.dumps(v, indent=2, default=default, allow_nan=False, ensure_ascii=False)
-                except Exception as err:
-                    if not silent:
-                        log.error(f'Save: file="{filename}" key="{k}" value="{v}" {err}')
-                    del data[k]
-            output = json.dumps(data, indent=2, default=default)
+            try: # plain JSON (no NaN, nothing that needs default) gives the same bytes in one pass, without the copy and per-key validation below
+                data = snapshot
+                output = json.dumps(data, indent=2, allow_nan=False)
+            except Exception:
+                data = copy.deepcopy(snapshot)
+                for k, v in list(data.items()) if isinstance(data, dict) else []: # validate each key-by-key to avoid global exceptions
+                    try:
+                        _tmp = json.dumps(v, indent=2, default=default, allow_nan=False, ensure_ascii=False)
+                    except Exception as err:
+                        if not silent:
+                            log.error(f'Save: file="{filename}" key="{k}" value="{v}" {err}')
+                        del data[k]
+                output = json.dumps(data, indent=2, default=default)
         except Exception as err:
             log.error(f'Save failed: file="{filename}" {err}')
             return

@@ -370,9 +370,10 @@ def vae_decode(latents, model, output_type='np', vae_type='Full', width=None, he
         t1 = time.time()
         log.debug(f'Profile: VAE decode: {t1-t0:.2f}')
     sd_models.offload_ondemand(model)
-    devices.torch_gc()
     if use_job:
-        shared.state.end(jobid)
+        shared.state.end(jobid) # end() runs torch_gc
+    else:
+        devices.torch_gc()
     return images
 
 
@@ -392,8 +393,7 @@ def vae_encode(image, model):
     tensor = tensor * 2 - 1
     latents = full_vae_encode(image=tensor, model=shared.sd_model)
     sd_models.offload_ondemand(model)
-    devices.torch_gc()
-    shared.state.end(jobid)
+    shared.state.end(jobid) # end() runs torch_gc
     return latents
 
 
