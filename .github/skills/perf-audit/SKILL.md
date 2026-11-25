@@ -51,6 +51,12 @@ Locate optimization opportunities that are real, material and fixable with a nar
 | GC and memory | log lines `GC: ... time=`; `VmRSS` in `/proc/<pid>/status`; `len(gc.get_objects())` in-process | repeat 30 generations or several model switches and compare growth |
 | Browser | Playwright with Chromium: navigation timing, request count and bytes, long tasks, DOM node count, CDP `Performance.getMetrics` while idle | cost that grows with cards, gallery files or dataset size |
 
+Browser work on a shared machine:
+
+- Try a UI change without rebuilding: rewrite exact strings of `ui/dist/sdnext.mjs` in the test script and serve the result with Playwright's `page.route`; rebuild with `pnpm run build:core` only for the final check.
+- Before trusting a DOM equivalence check, compare the original with itself; timestamps and image titles that change when lazy images finish loading differ between runs.
+- Chromium renderers crash ("Target crashed") when less than about 4 GB is free: wait for `MemAvailable` in `/proc/meminfo` before each run and run one browser at a time.
+
 Build synthetic libraries instead of downloading: thousands of tiny `.safetensors` files with metadata headers plus `.json` and preview sidecars, or an output folder with 20,000 small images, all under `tmp/`, passed to the server with `--lora-dir`, `--data-dir` or `--models-dir`.
 
 ## Finding Format

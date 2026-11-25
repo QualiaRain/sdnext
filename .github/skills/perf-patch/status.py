@@ -79,8 +79,10 @@ def main():
                 state = 'rejected by builder'
             elif review == 'running':
                 state = f"built ({b.get('verdict')}), reviewing"
+            elif r is None and review is None:
+                state = f"built ({b.get('verdict')}), waiting for review"
             elif r is None:
-                state = f"built ({b.get('verdict')}), no review"
+                state = f"built ({b.get('verdict')}), no review result"
             else:
                 state = f"{b.get('verdict')} / {r.get('verdict')}"
             counts[state.split(' (')[0].split(',')[0]] = counts.get(state.split(' (')[0].split(',')[0], 0) + 1
