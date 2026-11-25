@@ -90,16 +90,28 @@ def create_video_metadata(p: processing.StableDiffusionProcessingVideo | None, m
     return metadata
 
 
-def images_to_tensor(images):
+def images_to_tensor(images, uint8: bool = False):
     if images is None or len(images) == 0:
         return None
     array = [torch.from_numpy(np.array(image)) for image in images]
     tensor = torch.stack(array, dim=0) # n h w c
     tensor = tensor.unsqueeze(0) # 1, n, h, w, c
+    if uint8 and tensor.dtype == torch.uint8 and tensor.ndim == 5:
+        return tensor.permute(0, 4, 1, 2, 3) # 1, c, n, h, w view of the 8-bit frames, for save_video to encode as they are
     tensor = tensor.permute(0, 4, 1, 2, 3).contiguous() # 1, c, n, h, w
-    tensor = (tensor.float() / 127.5) - 1.0 # from [0,255] to [-1,1]
+    tensor = tensor.float().div_(127.5).sub_(1.0) # from [0,255] to [-1,1], in place on the freshly stacked copy
     # log.debug(f'Video output: images={len(images)} tensor={tensor.shape}')
     return tensor
+
+
+def keeps_frames(p, interpolate, upscaler) -> bool:
+    # true when save_video will neither interpolate nor upscale, the same tests as there plus the names upscale_video skips
+    try:
+        interpolates = interpolate > 0 and not getattr(p, 'video_interpolated', False)
+        upscales = upscaler is not None and len(upscaler) > 0 and not getattr(p, 'video_upscaled', False) and upscaler.lower() != 'none'
+        return not interpolates and not upscales
+    except Exception:
+        return False
 
 
 def numpy_to_tensor(images):
@@ -336,8 +348,10 @@ def save_video(
         return 0, output_video, None
     if isinstance(pixels, np.ndarray):
         pixels = numpy_to_tensor(pixels)
+    direct = False # 8-bit frames taken from images, encoded without the float round trip
     if isinstance(pixels, list) and isinstance(pixels[0], Image.Image):
-        pixels = images_to_tensor(pixels)
+        pixels = images_to_tensor(pixels, uint8=reclamp and keeps_frames(p, mp4_interpolate, upscale_upscaler))
+        direct = pixels.dtype == torch.uint8
     if not torch.is_tensor(pixels):
         log.error(f'Video: type={type(pixels)} not a tensor')
         return 0, output_video, None
@@ -387,8 +401,10 @@ def save_video(
         if stream is not None:
             stream.output_queue.push(('progress', (None, 'Saving video...')))
 
-        if reclamp:
-            x = torch.clamp(pixels.float(), -1., 1.) * 127.5 + 127.5
+        if direct:
+            x = pixels
+        elif reclamp:
+            x = torch.clamp(pixels.float(), -1., 1.).mul_(127.5).add_(127.5) # clamp returns a new tensor, so the caller's pixels are not modified
         else:
             x = pixels.float() * 255.0
         x = x.detach().cpu().to(torch.uint8)

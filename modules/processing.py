@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import zlib
 import numpy as np
 from PIL import Image, ImageOps
 from modules import shared, devices, errors, images, scripts_manager, memstats, script_callbacks, extra_networks, sd_models, sd_checkpoint, sd_vae, processing_helpers, processing_grading, timer, masking
@@ -456,6 +457,24 @@ def print_stats():
         timer.blocks.reset()
 
 
+def contains_image(items: list, image, digests: dict) -> bool:
+    # same result as `image in items`, but reads each image's pixels once instead of once per compared pair: video frames share mode, size and info, so Image.__eq__ compares every pair byte by byte
+    if not isinstance(image, Image.Image):
+        return image in items
+    for other in items:
+        if other is image:
+            return True
+        if type(other) is type(image) and other.mode == image.mode and other.size == image.size and other.info == image.info:
+            for im in (other, image):
+                if id(im) not in digests:
+                    digests[id(im)] = zlib.crc32(im.tobytes())
+            if digests[id(other)] != digests[id(image)]:
+                continue # pixels differ, so other == image is False
+        if other == image:
+            return True
+    return False
+
+
 def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     t0 = time.time()
     if type(p.prompt) == list:
@@ -555,8 +574,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 output_binary = samples.bytes
             else:
                 batch_images, batch_infotexts = process_samples(p, samples)
+                digests = {} # keyed by id, valid while both lists hold the images
                 for batch_image, batch_infotext in zip(batch_images, batch_infotexts, strict=False):
-                    if batch_image is not None and batch_image not in output_images:
+                    if batch_image is not None and not contains_image(output_images, batch_image, digests):
                         output_images.append(batch_image)
                         infotexts.append(batch_infotext)
 

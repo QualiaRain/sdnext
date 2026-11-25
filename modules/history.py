@@ -29,7 +29,7 @@ class Item:
         self.preview = preview
         self.info = info
         self.ops = ops.copy()
-        if ['video'] in ops:
+        if 'video' in ops:
             self.images = None
         else:
             self.images = images
@@ -120,6 +120,10 @@ class History:
             return
         item = Item(latent, preview, info, ops, images)
         self.latents.appendleft(item)
+        if item.images is not None: # last_image only returns the newest item with images, so images of older items would only hold memory
+            for older in self.latents:
+                if older is not item:
+                    older.images = None
         if self.count >= shared.opts.latent_history:
             self.latents.pop()
         log.debug(f'History: len={self.count} add={item}')

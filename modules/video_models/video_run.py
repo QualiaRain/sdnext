@@ -2,6 +2,7 @@ import os
 import copy
 import time
 from dataclasses import dataclass
+from PIL import Image
 from modules import shared, errors, sd_models, processing, devices, images, ui_common, scripts_manager, modular_load
 from modules.logger import log
 from modules.video_models import models_def, video_utils, video_load, video_vae, video_overrides, video_save
@@ -322,7 +323,9 @@ def run(selected: models_def.Model, *,
         return VideoResult(images=stills, video_path=None, thumb_path=None, num_frames=len(stills), fps=0.0, has_audio=False, still=True, processed=processed, width=still_w, height=still_h)
 
     if hasattr(processed, 'images') and processed.images is not None:
-        pixels = video_save.images_to_tensor(processed.images)
+        pixels = processed.images
+        if mp4_interpolate > 0 or not (isinstance(pixels, list) and len(pixels) > 0 and isinstance(pixels[0], Image.Image)): # save_video converts a list of images itself, only when it needs to
+            pixels = video_save.images_to_tensor(pixels)
     else:
         pixels = None
     if hasattr(processed, 'audio') and processed.audio is not None:
